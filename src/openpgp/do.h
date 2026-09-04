@@ -23,10 +23,14 @@ extern const uint8_t algorithm_attr_bp256r1[];
 extern const uint8_t algorithm_attr_bp384r1[];
 extern const uint8_t algorithm_attr_bp512r1[];
 extern const uint8_t algorithm_attr_cv25519[];
+#ifdef MBEDTLS_ECP_DP_CURVE448_ENABLED
 extern const uint8_t algorithm_attr_x448[];
+#endif
 extern const uint8_t algorithm_attr_rsa2k[];
 extern const uint8_t algorithm_attr_rsa4096[];
-#ifdef MBEDTLS_EDDSA_C
+#if defined(MBEDTLS_EDDSA_C) && defined(MBEDTLS_ECP_DP_ED25519_ENABLED)
 extern const uint8_t algorithm_attr_ed25519[];
+#endif
+#if defined(MBEDTLS_EDDSA_C) && defined(MBEDTLS_ECP_DP_ED448_ENABLED)
 extern const uint8_t algorithm_attr_ed448[];
 #endif
