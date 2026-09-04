@@ -30,6 +30,7 @@
 #include "version.h"
 #include "asn1.h"
 #include "mbedtls/aes.h"
+#include "mbedtls/asn1write.h"
 #include "mbedtls/des.h"
 #include "mbedtls/ecdh.h"
 #include "mbedtls/x509_crt.h"
@@ -89,7 +90,7 @@ static int x509_create_cert(void *pk_ctx, uint8_t algo, uint8_t slot, bool attes
     mbedtls_x509write_crt_init(&ctx);
     mbedtls_x509write_crt_set_version(&ctx, MBEDTLS_X509_CRT_VERSION_3);
     mbedtls_x509write_crt_set_validity(&ctx, "20240325000000", "20741231235959");
-    uint8_t serial[20];
+    uint8_t serial[16];
     random_gen(NULL, serial, sizeof(serial));
     mbedtls_x509write_crt_set_serial_raw(&ctx, serial, sizeof(serial));
     mbedtls_pk_context skey, ikey;
@@ -117,15 +118,25 @@ static int x509_create_cert(void *pk_ctx, uint8_t algo, uint8_t slot, bool attes
         mbedtls_x509write_crt_set_issuer_key(&ctx, &ikey);
         uint8_t ver[] = {PIV_VERSION_MAJOR, PIV_VERSION_MINOR, 0};
         mbedtls_x509write_crt_set_extension(&ctx, "\x2B\x06\x01\x04\x01\x82\xC4\x0A\x03\x03", 10, 0, ver, sizeof(ver));
-        uint32_t serial = get_serial();
-        mbedtls_x509write_crt_set_extension(&ctx, "\x2B\x06\x01\x04\x01\x82\xC4\x0A\x03\x07", 10, 0, (const uint8_t *)&serial, sizeof(serial));
-        int meta_len = 0;
-        uint8_t *meta;
-        if ((meta_len = meta_find(slot, &meta)) >= 0) {
-            mbedtls_x509write_crt_set_extension(&ctx, "\x2B\x06\x01\x04\x01\x82\xC4\x0A\x03\x08", 10, 0, &meta[1], 2);
+        uint8_t serial_ext[7];
+        uint8_t *serial_ext_p = serial_ext + sizeof(serial_ext);
+        int serial_ext_len = mbedtls_asn1_write_int(&serial_ext_p, serial_ext, get_serial());
+        if (serial_ext_len < 0) {
+            mbedtls_ecdsa_free(&actx);
+            mbedtls_x509write_crt_free(&ctx);
+            return serial_ext_len;
         }
-        uint8_t v = 1;
-        mbedtls_x509write_crt_set_extension(&ctx, "\x2B\x06\x01\x04\x01\x82\xC4\x0A\x03\x09", 10, 0, &v, sizeof(serial));
+        mbedtls_x509write_crt_set_extension(&ctx, "\x2B\x06\x01\x04\x01\x82\xC4\x0A\x03\x07", 10, 0,
+                                            serial_ext_p, (size_t)serial_ext_len);
+        uint8_t *meta = NULL;
+        uint16_t meta_len = meta_find(slot, &meta);
+        if (meta_len >= 3) {
+            mbedtls_x509write_crt_set_extension(&ctx, "\x2B\x06\x01\x04\x01\x82\xC4\x0A\x03\x08", 10, 0,
+                                                &meta[1], 2);
+        }
+        uint8_t form_factor = 1;
+        mbedtls_x509write_crt_set_extension(&ctx, "\x2B\x06\x01\x04\x01\x82\xC4\x0A\x03\x09", 10, 0,
+                                            &form_factor, sizeof(form_factor));
     }
     else {
         uint8_t wslot = slot;
@@ -140,7 +151,7 @@ static int x509_create_cert(void *pk_ctx, uint8_t algo, uint8_t slot, bool attes
         mbedtls_x509write_crt_set_subject_name(&ctx, buf_sname);
         mbedtls_x509write_crt_set_issuer_key(&ctx, &skey);
     }
-    if (algo == PIV_ALGO_ECCP384) {
+    if (!attestation && algo == PIV_ALGO_ECCP384) {
         mbedtls_x509write_crt_set_md_alg(&ctx, MBEDTLS_MD_SHA384);
     }
     else {

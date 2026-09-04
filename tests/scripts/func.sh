@@ -14,9 +14,9 @@ gen_and_check() {
     test $? -eq 0 && echo -n "." || exit $?
     grep -q "Successfully generated a new private key" <<< $e && echo -n "." || exit $?
     e=$(piv status 2>&1)
+    test $? -eq 0 && echo -n "." || exit $?
     e=${e//$'\t'/}
     e=${e//$'\n'/}
-    test $? -eq 0 && echo -n "." || exit $?
     grep -q "Slot $2:Algorithm:$1" <<< $e && echo -n "." || exit $?
 }
 delete_key() {
