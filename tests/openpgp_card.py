@@ -271,7 +271,7 @@ class OpenPGP_Card(object):
         if sw[0] == 0x61:
             return self.cmd_get_response(sw[1])
         elif (sw[-2] == 0x61):
-            return sw + self.cmd_get_response(sw[-1])
+            return sw[:-2] + self.cmd_get_response(sw[-1])
         elif sw[-2] == 0x90 and sw[-1] == 0x00:
             return sw[0:-2]
         if sw[0] == 0x6a and sw[1] == 0x88:

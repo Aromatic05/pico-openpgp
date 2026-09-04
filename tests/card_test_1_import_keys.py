@@ -75,7 +75,7 @@ class Test_Card_Personalize_Card_2(object):
 
     def test_ds_counter_0(self, card):
         c = get_data_object(card, 0x7a)
-        assert c == b'\x93\x03\x00\x00\x00'
+        assert c == expected_security_support_template(card, 0)
 
     def test_pw1_status(self, card):
         s = get_data_object(card, 0xc4)
@@ -85,7 +85,7 @@ class Test_Card_Personalize_Card_2(object):
         if card.is_yubikey:
             pytest.skip("Yubikey raises 6e82 error for composed data object 6E")
         else:
-            app_data = get_data_object(card, 0x6e)
+            app_data = get_constructed_app_data(card)
             hist_len = app_data[20]
             # FIXME: parse and check DO of C0, C1, C2, C3, C4, and C6
             assert app_data[0:8] == b"\x4f\x10\xd2\x76\x00\x01\x24\x01" and \
