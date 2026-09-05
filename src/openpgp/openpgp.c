@@ -280,9 +280,17 @@ int dek_decrypt(uint8_t *data, size_t len) {
     return r;
 }
 
-void init_openpgp() {
+static void reset_openpgp_session(void) {
     isUserAuthenticated = false;
-    has_pw1 = has_pw3 = false;
+    has_pw1 = has_pw2 = has_pw3 = has_rc = false;
+    mbedtls_platform_zeroize(session_pw1, sizeof(session_pw1));
+    mbedtls_platform_zeroize(session_rc, sizeof(session_rc));
+    mbedtls_platform_zeroize(session_pw3, sizeof(session_pw3));
+    release_dek();
+}
+
+void init_openpgp() {
+    reset_openpgp_session();
     algo_dec = EF_ALGO_PRIV2;
     algo_aut = EF_ALGO_PRIV3;
     pk_dec = EF_PK_DEC;
@@ -292,8 +300,7 @@ void init_openpgp() {
 }
 
 int openpgp_unload() {
-    isUserAuthenticated = false;
-    has_pw1 = has_pw3 = false;
+    reset_openpgp_session();
     algo_dec = EF_ALGO_PRIV2;
     algo_aut = EF_ALGO_PRIV3;
     pk_dec = EF_PK_DEC;

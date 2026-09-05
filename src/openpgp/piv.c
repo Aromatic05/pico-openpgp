@@ -76,7 +76,10 @@ uint8_t yk_aid[] = {
 };
 
 bool has_pwpiv = false;
+bool has_mgm = false;
+bool has_challenge = false;
 uint8_t session_pwpiv[32];
+uint8_t challenge[16];
 
 int piv_process_apdu();
 
@@ -275,13 +278,23 @@ static void scan_files_piv() {
     low_flash_available();
 }
 
+static void reset_piv_session(void) {
+    has_pwpiv = false;
+    has_mgm = false;
+    has_challenge = false;
+    mbedtls_platform_zeroize(session_pwpiv, sizeof(session_pwpiv));
+    mbedtls_platform_zeroize(challenge, sizeof(challenge));
+}
+
 void init_piv() {
     scan_files_piv();
     has_pwpiv = false;
+    mbedtls_platform_zeroize(session_pwpiv, sizeof(session_pwpiv));
     // cmd_select();
 }
 
 int piv_unload() {
+    reset_piv_session();
     return PICOKEY_OK;
 }
 
@@ -572,9 +585,6 @@ static int cmd_get_metadata() {
     }
     return SW_OK();
 }
-uint8_t challenge[16];
-bool has_challenge = false;
-bool has_mgm = false;
 static int cmd_authenticate() {
     uint8_t algo = P1(apdu), key_ref = P2(apdu);
     if (apdu.nc == 0) {
@@ -911,6 +921,19 @@ static int cmd_authenticate() {
     return SW_OK();
 }
 
+static uint16_t piv_key_storage_fid(uint8_t key_ref) {
+    return key_ref == 0x93 ? EF_PIV_KEY_RETIRED18 : key_ref;
+}
+
+static void piv_clear_generated_material(uint8_t key_ref, uint16_t cert_fid) {
+    file_t *key = search_by_fid(piv_key_storage_fid(key_ref), NULL, SPECIFY_EF);
+    file_t *cert = search_by_fid(cert_fid, NULL, SPECIFY_EF);
+    flash_clear_file(key);
+    flash_clear_file(cert);
+    meta_delete(key_ref);
+    low_flash_available();
+}
+
 static int cmd_asym_keygen() {
     uint8_t key_ref = P2(apdu);
     if (apdu.nc == 0) {
@@ -974,11 +997,19 @@ static int cmd_asym_keygen() {
         make_rsa_response(&rsa);
         uint8_t cert[2048];
         r = x509_create_cert(&rsa, a80.data[0], key_ref, false, cert, sizeof(cert));
+        if (r <= 0) {
+            mbedtls_rsa_free(&rsa);
+            return SW_EXEC_ERROR();
+        }
         file_t *ef = search_by_fid(key_cert, NULL, SPECIFY_ANY);
-        file_put_data(ef, cert + sizeof(cert) - r, r);
-        r = store_keys(&rsa, ALGO_RSA, key_ref == 0x93 ? EF_PIV_KEY_RETIRED18 : key_ref, false);
+        if (!ef || file_put_data(ef, cert + sizeof(cert) - r, (uint16_t)r) != PICOKEY_OK) {
+            mbedtls_rsa_free(&rsa);
+            return SW_EXEC_ERROR();
+        }
+        r = store_keys(&rsa, ALGO_RSA, piv_key_storage_fid(key_ref), false);
         mbedtls_rsa_free(&rsa);
         if (r != PICOKEY_OK) {
+            piv_clear_generated_material(key_ref, key_cert);
             return SW_EXEC_ERROR();
         }
     }
@@ -995,11 +1026,19 @@ static int cmd_asym_keygen() {
         make_ecdsa_response(&ecdsa);
         uint8_t cert[2048];
         r = x509_create_cert(&ecdsa, a80.data[0], key_ref, false, cert, sizeof(cert));
+        if (r <= 0) {
+            mbedtls_ecdsa_free(&ecdsa);
+            return SW_EXEC_ERROR();
+        }
         file_t *ef = search_by_fid(key_cert, NULL, SPECIFY_ANY);
-        file_put_data(ef, cert + sizeof(cert) - r, r);
-        r = store_keys(&ecdsa, ALGO_ECDSA, key_ref == 0x93 ? EF_PIV_KEY_RETIRED18 : key_ref, false);
+        if (!ef || file_put_data(ef, cert + sizeof(cert) - r, (uint16_t)r) != PICOKEY_OK) {
+            mbedtls_ecdsa_free(&ecdsa);
+            return SW_EXEC_ERROR();
+        }
+        r = store_keys(&ecdsa, ALGO_ECDSA, piv_key_storage_fid(key_ref), false);
         mbedtls_ecdsa_free(&ecdsa);
         if (r != PICOKEY_OK) {
+            piv_clear_generated_material(key_ref, key_cert);
             return SW_EXEC_ERROR();
         }
     }
@@ -1013,7 +1052,10 @@ static int cmd_asym_keygen() {
         def_pinpol = PINPOLICY_ALWAYS;
     }
     uint8_t meta[] = {a80.data[0], asn1_len(&aaa) ? aaa.data[0] : def_pinpol, asn1_len(&aab) ? aab.data[0] : TOUCHPOLICY_ALWAYS, ORIGIN_GENERATED};
-    meta_add(key_ref, meta, sizeof(meta));
+    if (meta_add(key_ref, meta, sizeof(meta)) != PICOKEY_OK) {
+        piv_clear_generated_material(key_ref, key_cert);
+        return SW_EXEC_ERROR();
+    }
     low_flash_available();
     return SW_OK();
 }
@@ -1069,7 +1111,9 @@ static int cmd_set_mgmkey() {
         return SW_WRONG_DATA();
     }
     file_t *ef = search_by_fid(key_ref, NULL, SPECIFY_ANY);
-    file_put_data(ef, apdu.data + 3, pinlen);
+    if (!ef || file_put_data(ef, apdu.data + 3, pinlen) != PICOKEY_OK) {
+        return SW_EXEC_ERROR();
+    }
     uint8_t *meta = NULL, new_meta[4];
     int meta_len = 0;
     if ((meta_len = meta_find(key_ref, &meta)) <= 0) {
@@ -1078,7 +1122,9 @@ static int cmd_set_mgmkey() {
     memcpy(new_meta, meta, 4);
     new_meta[0] = algo;
     new_meta[2] = touch;
-    meta_add(key_ref, new_meta, sizeof(new_meta));
+    if (meta_add(key_ref, new_meta, sizeof(new_meta)) != PICOKEY_OK) {
+        return SW_EXEC_ERROR();
+    }
     low_flash_available();
     return SW_OK();
 }
@@ -1087,24 +1133,42 @@ static int cmd_move_key() {
     if (apdu.nc != 0) {
         return SW_WRONG_LENGTH();
     }
-    uint8_t to = P1(apdu), from = P2(apdu);
-    if ((!IS_KEY(to) && to != 0xFF) || !IS_KEY(from)) {
+    uint8_t to_ref = P1(apdu), from_ref = P2(apdu);
+    if ((!IS_KEY(to_ref) && to_ref != 0xFF) || !IS_KEY(from_ref) || to_ref == from_ref) {
         return SW_INCORRECT_P1P2();
     }
-    if (from == 0x93) {
-        from = EF_PIV_KEY_RETIRED18;
-    }
-    if (to == 0x93) {
-        to = EF_PIV_KEY_RETIRED18;
-    }
-    file_t *efs, *efd;
-    if (!(efs = search_by_fid(from, NULL, SPECIFY_EF)) || (!(efd = search_by_fid(to, NULL, SPECIFY_EF)) && to != 0xFF)) {
+
+    uint16_t from_fid = piv_key_storage_fid(from_ref);
+    uint16_t to_fid = to_ref == 0xFF ? 0xFFFF : piv_key_storage_fid(to_ref);
+    file_t *source = search_by_fid(from_fid, NULL, SPECIFY_EF);
+    file_t *dest = to_ref == 0xFF ? NULL : search_by_fid(to_fid, NULL, SPECIFY_EF);
+    if (!file_has_data(source) || (to_ref != 0xFF && !dest)) {
         return SW_FILE_NOT_FOUND();
     }
-    if (to != 0xFF) {
-        file_put_data(efd, file_get_data(efs), file_get_size(efs));
+
+    if (to_ref != 0xFF) {
+        uint8_t meta_copy[8];
+        uint8_t *meta = NULL;
+        uint16_t meta_len = meta_find(from_ref, &meta);
+        if (meta_len > sizeof(meta_copy)) {
+            return SW_EXEC_ERROR();
+        }
+        if (meta_len > 0) {
+            memcpy(meta_copy, meta, meta_len);
+        }
+        if (file_put_data(dest, file_get_data(source), file_get_size(source)) != PICOKEY_OK) {
+            return SW_EXEC_ERROR();
+        }
+        if (meta_len > 0 && meta_add(to_ref, meta_copy, meta_len) != PICOKEY_OK) {
+            return SW_EXEC_ERROR();
+        }
     }
-    flash_clear_file(efs);
+
+    /* Keep the source metadata record allocated. GET METADATA is gated on key
+     * presence, and reusing the record avoids flash churn on delete/regenerate. */
+    if (flash_clear_file(source) != PICOKEY_OK) {
+        return SW_EXEC_ERROR();
+    }
     low_flash_available();
     return SW_OK();
 }
@@ -1347,7 +1411,9 @@ static int cmd_import_asym() {
         def_pinpol = PINPOLICY_ALWAYS;
     }
     uint8_t meta[] = { algo,  asn1_len(&aaa) ? aaa.data[0] : def_pinpol, asn1_len(&aab) ? aab.data[0] : TOUCHPOLICY_ALWAYS, ORIGIN_IMPORTED };
-    meta_add(key_ref, meta, sizeof(meta));
+    if (meta_add(key_ref, meta, sizeof(meta)) != PICOKEY_OK) {
+        return SW_EXEC_ERROR();
+    }
     return SW_OK();
 }
 
