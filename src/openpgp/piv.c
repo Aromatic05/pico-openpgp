@@ -1198,12 +1198,14 @@ static int cmd_set_retries() {
     if (!ef) {
         return SW_MEMORY_FAILURE();
     }
-    uint8_t *tmp = (uint8_t *)calloc(1, file_get_size(ef));
-    memcpy(tmp, file_get_data(ef), file_get_size(ef));
+    if (!file_has_data(ef) || file_get_size(ef) != 6) {
+        return SW_MEMORY_FAILURE();
+    }
+    uint8_t tmp[6];
+    memcpy(tmp, file_get_data(ef), sizeof(tmp));
     tmp[4] = P1(apdu);
     tmp[5] = P2(apdu);
-    file_put_data(ef, tmp, file_get_size(ef));
-    free(tmp);
+    file_put_data(ef, tmp, sizeof(tmp));
 
     ef = search_by_fid(EF_PIV_PIN, NULL, SPECIFY_ANY);
     const uint8_t def_pin[8] = { 0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0xFF, 0xFF };

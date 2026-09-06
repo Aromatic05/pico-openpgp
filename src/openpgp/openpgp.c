@@ -744,10 +744,7 @@ int rsa_sign(mbedtls_rsa_context *ctx,
         r = mbedtls_rsa_private(ctx, random_gen, NULL, data, out);
     }
     else {
-        uint8_t *signature = (uint8_t *) calloc(key_size, sizeof(uint8_t));
-        r = mbedtls_rsa_pkcs1_sign(ctx, random_gen, NULL, md, hash_len, hsh, signature);
-        memcpy(out, signature, key_size);
-        free(signature);
+        r = mbedtls_rsa_pkcs1_sign(ctx, random_gen, NULL, md, hash_len, hsh, out);
     }
     *out_len = key_size;
     return r;
