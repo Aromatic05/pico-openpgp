@@ -99,7 +99,19 @@ static int x509_create_cert(void *pk_ctx, uint8_t algo, uint8_t slot, bool attes
     mbedtls_x509write_crt_set_validity(&ctx, "20240325000000", "20741231235959");
     uint8_t serial[16];
     random_gen(NULL, serial, sizeof(serial));
-    mbedtls_x509write_crt_set_serial_raw(&ctx, serial, sizeof(serial));
+    size_t serial_offset = 0;
+    while (serial_offset + 1 < sizeof(serial) && serial[serial_offset] == 0) {
+        serial_offset++;
+    }
+    if (serial_offset == sizeof(serial) - 1 && serial[serial_offset] == 0) {
+        serial[serial_offset] = 1;
+    }
+    int ret = mbedtls_x509write_crt_set_serial_raw(
+        &ctx, serial + serial_offset, sizeof(serial) - serial_offset);
+    if (ret != 0) {
+        mbedtls_x509write_crt_free(&ctx);
+        return ret;
+    }
     mbedtls_pk_context skey, ikey;
     mbedtls_ecdsa_context actx; // attestation key
     mbedtls_pk_init(&skey);
@@ -175,7 +187,7 @@ static int x509_create_cert(void *pk_ctx, uint8_t algo, uint8_t slot, bool attes
     mbedtls_x509write_crt_set_key_usage(&ctx,
                                         MBEDTLS_X509_KU_DIGITAL_SIGNATURE |
                                         MBEDTLS_X509_KU_KEY_CERT_SIGN);
-    int ret = mbedtls_x509write_crt_der(&ctx, buffer, buffer_size, random_gen, NULL);
+    ret = mbedtls_x509write_crt_der(&ctx, buffer, buffer_size, random_gen, NULL);
     /* skey cannot be freed, as it is freed later */
     if (attestation) {
         mbedtls_ecdsa_free(&actx);
@@ -486,7 +498,10 @@ static int cmd_get_metadata() {
     else if (key_ref == 0x81) {
         key_ref = EF_PIV_PUK;
     }
-    file_t *ef_key = search_by_fid(piv_key_storage_fid((uint8_t)key_ref), NULL, SPECIFY_EF);
+    uint16_t storage_fid = (key_ref == EF_PIV_PIN || key_ref == EF_PIV_PUK)
+                               ? key_ref
+                               : piv_key_storage_fid((uint8_t)key_ref);
+    file_t *ef_key = search_by_fid(storage_fid, NULL, SPECIFY_EF);
     if (!file_has_data(ef_key)) {
         return SW_REFERENCE_NOT_FOUND();
     }

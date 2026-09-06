@@ -33,9 +33,13 @@ _, sw1, sw2 = conn.transmit([0x00, 0xA4, 0x04, 0x00, len(aid), *aid])
 if sw1 != 0x61 and (sw1, sw2) != (0x90, 0x00):
     raise SystemExit(2)
 data, sw1, sw2 = conn.transmit([0x00, 0xF7, 0x00, slot])
+full = bytearray(data)
+while sw1 == 0x61:
+    data, sw1, sw2 = conn.transmit([0x00, 0xC0, 0x00, 0x00, sw2])
+    full.extend(data)
 if (sw1, sw2) != (0x90, 0x00):
     raise SystemExit(1)
-data = bytes(data)
+data = bytes(full)
 if len(data) < 3 or data[0:2] != b'\x01\x01':
     raise SystemExit(3)
 print(f'{data[2]:02x}')
