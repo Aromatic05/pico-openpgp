@@ -31,7 +31,9 @@ int cmd_terminate_df() {
     if (apdu.nc != 0) {
         return SW_WRONG_LENGTH();
     }
-    initialize_flash(true);
-    scan_files_openpgp();
+    if (reset_openpgp_storage() != PICOKEY_OK) {
+        return SW_EXEC_ERROR();
+    }
+    init_openpgp();
     return SW_OK();
 }

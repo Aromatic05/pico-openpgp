@@ -53,6 +53,7 @@ if(NOT ESP_PLATFORM)
 endif()
 set(SOURCES ${SOURCES}
         ${CMAKE_CURRENT_LIST_DIR}/src/openpgp/openpgp.c
+        ${CMAKE_CURRENT_LIST_DIR}/src/openpgp/reset.c
         ${CMAKE_CURRENT_LIST_DIR}/src/openpgp/files.c
         ${CMAKE_CURRENT_LIST_DIR}/src/openpgp/piv.c
         ${CMAKE_CURRENT_LIST_DIR}/src/openpgp/management.c

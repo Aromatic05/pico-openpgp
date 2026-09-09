@@ -206,7 +206,7 @@ static void scan_files_piv() {
     if ((ef = search_by_fid(EF_PW_PRIV, NULL, SPECIFY_ANY))) {
         if (file_get_size(ef) == 0) {
             printf("PW status is empty. Initializing to default\r\n");
-            const uint8_t def[] = { 0x1, 127, 127, 127, 3, 3, 3, 3, 3 };
+            const uint8_t def[] = { 0x1, 127, 127, 127, 3, 0, 3, 3, 3 };
             file_put_data(ef, def, sizeof(def));
         }
         else if (file_get_size(ef) == 7) {
@@ -248,34 +248,27 @@ static void scan_files_piv() {
             hash_multi(defpin, sizeof(defpin), session_pwpiv);
             aes_encrypt_cfb_256(session_pwpiv, def, def + IV_SIZE + 32*3, 32);
             file_put_data(ef, def, sizeof(def));
-
-            has_pwpiv = true;
-            uint8_t *key = (uint8_t *)"\x01\x02\x03\x04\x05\x06\x07\x08\x01\x02\x03\x04\x05\x06\x07\x08\x01\x02\x03\x04\x05\x06\x07\x08";
-            file_t *ef = search_by_fid(EF_PIV_KEY_CARDMGM, NULL, SPECIFY_ANY);
-            file_put_data(ef, key, 24);
-            uint8_t meta[] = { PIV_ALGO_AES192, PINPOLICY_ALWAYS, TOUCHPOLICY_NEVER };
-            meta_add(EF_PIV_KEY_CARDMGM, meta, sizeof(meta));
-            has_pwpiv = false;
-            memset(session_pwpiv, 0, sizeof(session_pwpiv));
-
             reset_dek = true;
         }
     }
-    {
-        static const uint8_t default_mgm_key[24] = {
-            0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08,
-            0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08,
-            0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08,
-        };
-        file_t *mgm = search_by_fid(EF_PIV_KEY_CARDMGM, NULL, SPECIFY_EF);
-        uint8_t *meta = NULL;
-        uint16_t meta_len = meta_find(EF_PIV_KEY_CARDMGM, &meta);
-        if (file_has_data(mgm) && file_get_size(mgm) == sizeof(default_mgm_key) &&
-            memcmp(file_get_data(mgm), default_mgm_key, sizeof(default_mgm_key)) == 0 &&
-            meta_len == 3 && meta[0] == PIV_ALGO_3DES) {
-            uint8_t fixed_meta[3] = { PIV_ALGO_AES192, meta[1], TOUCHPOLICY_NEVER };
-            meta_add(EF_PIV_KEY_CARDMGM, fixed_meta, sizeof(fixed_meta));
-        }
+    static const uint8_t default_mgm_key[24] = {
+        0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08,
+        0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08,
+        0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08,
+    };
+    file_t *mgm = search_by_fid(EF_PIV_KEY_CARDMGM, NULL, SPECIFY_EF);
+    uint8_t *meta = NULL;
+    uint16_t meta_len = meta_find(EF_PIV_KEY_CARDMGM, &meta);
+    if (!file_has_data(mgm)) {
+        file_put_data(mgm, default_mgm_key, sizeof(default_mgm_key));
+        uint8_t default_meta[] = { PIV_ALGO_AES192, PINPOLICY_ALWAYS, TOUCHPOLICY_NEVER };
+        meta_add(EF_PIV_KEY_CARDMGM, default_meta, sizeof(default_meta));
+    }
+    else if (file_get_size(mgm) == sizeof(default_mgm_key) &&
+             memcmp(file_get_data(mgm), default_mgm_key, sizeof(default_mgm_key)) == 0 &&
+             meta_len == 3 && meta[0] == PIV_ALGO_3DES) {
+        uint8_t fixed_meta[3] = { PIV_ALGO_AES192, meta[1], TOUCHPOLICY_NEVER };
+        meta_add(EF_PIV_KEY_CARDMGM, fixed_meta, sizeof(fixed_meta));
     }
     if ((ef = search_by_fid(EF_PIV_PIN, NULL, SPECIFY_ANY))) {
         if (!ef->data || reset_dek) {
@@ -1310,8 +1303,9 @@ static int cmd_reset() {
     if (retPIN != 0 || retPUK != 0) {
         return SW_INCORRECT_PARAMS();
     }
-    initialize_flash(true);
-    low_flash_available();
+    if (reset_piv_storage() != PICOKEY_OK) {
+        return SW_EXEC_ERROR();
+    }
     init_piv();
     return SW_OK();
 }
