@@ -78,5 +78,12 @@ extern int load_aes_key(uint8_t *aes_key, file_t *fkey);
 extern int inc_sig_count();
 extern int dek_encrypt(uint8_t *data, size_t len);
 extern int dek_decrypt(uint8_t *data, size_t len);
+extern void init_openpgp();
+extern void init_piv();
+extern int reset_openpgp_storage();
+extern int reset_piv_storage();
+extern int piv_prepare_device_reset(void);
+extern int piv_restore_device_reset(void);
+extern void piv_cancel_device_reset(void);
 
 #endif

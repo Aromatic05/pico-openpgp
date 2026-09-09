@@ -34,6 +34,9 @@ int cmd_reset_retry() {
             if (!(rc = search_by_fid(EF_RC, NULL, SPECIFY_EF))) {
                 return SW_REFERENCE_NOT_FOUND();
             }
+            if (!file_has_data(rc)) {
+                return SW_REFERENCE_NOT_FOUND();
+            }
             uint8_t pin_len = file_get_data(rc)[0];
             if (apdu.nc <= pin_len) {
                 return SW_WRONG_LENGTH();
@@ -45,7 +48,7 @@ int cmd_reset_retry() {
             newpin_len = apdu.nc - pin_len;
             has_rc = true;
             hash_multi(apdu.data, pin_len, session_rc);
-            has_pw1 = has_pw3 = false;
+            has_pw1 = has_pw2 = has_pw3 = false;
             isUserAuthenticated = false;
         }
         else if (P1(apdu) == 0x2) {

@@ -114,14 +114,16 @@ void scan_files_openpgp() {
             uint8_t def[IV_SIZE + 32 + 32 + 32];
             const uint8_t *dek = random_bytes_get(IV_SIZE + 32);
             memcpy(def, dek, IV_SIZE + 32);
-            memcpy(def + IV_SIZE + 32, dek + IV_SIZE, 32);
-            memcpy(def + IV_SIZE + 32 + 32, dek + IV_SIZE, 32);
+            memcpy(def + IV_SIZE + 32 + 32, def + IV_SIZE, 32);
+            /* Wrapper #1 belongs exclusively to the optional Reset Code.
+             * RC is empty at factory state, so leave no known default
+             * credential capable of unwrapping the DEK through this slot. */
+            memcpy(def + IV_SIZE + 32, random_bytes_get(32), 32);
             hash_multi(def1, sizeof(def1), session_pw1);
             aes_encrypt_cfb_256(session_pw1, def, def + IV_SIZE, 32);
             memset(session_pw1, 0, sizeof(session_pw1));
 
             hash_multi(def3, sizeof(def3), session_pw3);
-            aes_encrypt_cfb_256(session_pw3, def, def + IV_SIZE + 32, 32);
             aes_encrypt_cfb_256(session_pw3, def, def + IV_SIZE + 32 + 32, 32);
             memset(session_pw3, 0, sizeof(session_pw3));
             file_put_data(ef, def, sizeof(def));
@@ -138,15 +140,40 @@ void scan_files_openpgp() {
             file_put_data(ef, dhash, sizeof(dhash));
         }
     }
+    bool migrated_legacy_default_rc = false;
     if ((ef = search_by_fid(EF_RC, NULL, SPECIFY_ANY))) {
-        if (!ef->data || reset_dek) {
-            printf("RC is empty. Initializing with default password\r\n");
-
-            const uint8_t def[8] = { 0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x37, 0x38 };
-            uint8_t dhash[33];
-            dhash[0] = sizeof(def);
-            double_hash_pin(def, sizeof(def), dhash + 1);
-            file_put_data(ef, dhash, sizeof(dhash));
+        if (reset_dek && file_has_data(ef)) {
+            /* OpenPGP Card 3.4 requires RC to be empty by default. A newly
+             * generated DEK invalidates any old RC wrapper as well. */
+            flash_clear_file(ef);
+        }
+        else if (file_has_data(ef) && file_get_size(ef) == 33) {
+            /* Older pico-openpgp firmware materialized the public value
+             * "12345678" as RC. Treat that exact known legacy value as
+             * unsafe factory state on upgrade, even if it was explicitly
+             * chosen by a user, and invalidate its dedicated DEK wrapper. */
+            static const uint8_t legacy_rc[] = {
+                '1', '2', '3', '4', '5', '6', '7', '8'
+            };
+            uint8_t legacy_hash[33];
+            legacy_hash[0] = sizeof(legacy_rc);
+            double_hash_pin(legacy_rc, sizeof(legacy_rc), legacy_hash + 1);
+            if (memcmp(file_get_data(ef), legacy_hash, sizeof(legacy_hash)) == 0) {
+                file_t *dek_ef = search_by_fid(EF_DEK, NULL, SPECIFY_EF);
+                if (file_has_data(dek_ef) &&
+                    file_get_size(dek_ef) >= IV_SIZE + 64 &&
+                    file_get_size(dek_ef) <= IV_SIZE + 4 * 32) {
+                    uint8_t record[IV_SIZE + 4 * 32];
+                    uint16_t record_len = file_get_size(dek_ef);
+                    memcpy(record, file_get_data(dek_ef), record_len);
+                    memcpy(record + IV_SIZE + 32, random_bytes_get(32), 32);
+                    file_put_data(dek_ef, record, record_len);
+                    mbedtls_platform_zeroize(record, sizeof(record));
+                }
+                flash_clear_file(ef);
+                migrated_legacy_default_rc = true;
+            }
+            mbedtls_platform_zeroize(legacy_hash, sizeof(legacy_hash));
         }
     }
     if ((ef = search_by_fid(EF_PW3, NULL, SPECIFY_ANY))) {
@@ -170,9 +197,24 @@ void scan_files_openpgp() {
     if ((ef = search_by_fid(EF_PW_PRIV, NULL, SPECIFY_ANY))) {
         if (!ef->data) {
             printf("PW status is empty. Initializing to default\r\n");
-            const uint8_t def[] = { 0x1, 127, 127, 127, 3, 3, 3 };
+            const uint8_t def[] = { 0x1, 127, 127, 127, 3, 0, 3 };
             file_put_data(ef, def, sizeof(def));
         }
+    }
+    /* Migrate cards written by older firmware that materialized a public
+     * default RC. An absent RC always implies a zero current retry counter,
+     * even if the shared PW status record predates this fix. */
+    file_t *rc = search_by_fid(EF_RC, NULL, SPECIFY_EF);
+    file_t *pw_status = search_by_fid(EF_PW_PRIV, NULL, SPECIFY_EF);
+    if ((migrated_legacy_default_rc || !file_has_data(rc)) &&
+        file_has_data(pw_status) &&
+        file_get_size(pw_status) >= 7 && file_get_data(pw_status)[5] != 0) {
+        uint8_t status[64];
+        uint16_t status_len = file_get_size(pw_status);
+        memcpy(status, file_get_data(pw_status), status_len);
+        status[5] = 0;
+        file_put_data(pw_status, status, status_len);
+        mbedtls_platform_zeroize(status, sizeof(status));
     }
     if ((ef = search_by_fid(EF_UIF_SIG, NULL, SPECIFY_ANY))) {
         if (!ef->data) {
@@ -226,7 +268,7 @@ void release_dek() {
 extern bool has_pwpiv;
 extern uint8_t session_pwpiv[32];
 int load_dek() {
-    if (!has_pw1 && !has_pw2 && !has_pw3 && !has_pwpiv) {
+    if (!has_pw1 && !has_pw2 && !has_rc && !has_pw3 && !has_pwpiv) {
         return PICOKEY_NO_LOGIN;
     }
     file_t *tf = search_by_fid(EF_DEK, NULL, SPECIFY_EF);
@@ -237,6 +279,11 @@ int load_dek() {
     if (has_pw1 || has_pw2) {
         memcpy(dek, file_get_data(tf), IV_SIZE + 32);
         r = aes_decrypt_cfb_256(session_pw1, dek, dek + IV_SIZE, 32);
+    }
+    else if (has_rc) {
+        memcpy(dek, file_get_data(tf), IV_SIZE);
+        memcpy(dek + IV_SIZE, file_get_data(tf) + IV_SIZE + 32, 32);
+        r = aes_decrypt_cfb_256(session_rc, dek, dek + IV_SIZE, 32);
     }
     else if (has_pw3) {
         memcpy(dek, file_get_data(tf), IV_SIZE);

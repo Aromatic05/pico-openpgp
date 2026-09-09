@@ -16,6 +16,7 @@
  */
 
 #include "openpgp.h"
+#include "otp.h"
 
 int cmd_put_data() {
     uint16_t fid = (P1(apdu) << 8) | P2(apdu);
@@ -58,9 +59,20 @@ int cmd_put_data() {
             uint8_t def[IV_SIZE + 32 + 32 + 32 + 32];
             memcpy(def, file_get_data(tf), file_get_size(tf));
             hash_multi(apdu.data, apdu.nc, session_rc);
+            /* load_dek() returns the unmasked content-encryption key. DEK
+             * wrappers persist the device-masked form so an OTP-derived
+             * hardware secret remains part of every password/RC unwrap. */
+            if (otp_key_1) {
+                for (int i = 0; i < 32; i++) {
+                    dek[IV_SIZE + i] ^= otp_key_1[i];
+                }
+            }
             memcpy(def + IV_SIZE + 32, dek + IV_SIZE, 32);
             aes_encrypt_cfb_256(session_rc, def, def + IV_SIZE + 32, 32);
             r = file_put_data(tf, def, sizeof(def));
+            if (r == PICOKEY_OK) {
+                r = pin_reset_retries(ef, true);
+            }
         }
         else {
             bool key_algorithm_changed =
