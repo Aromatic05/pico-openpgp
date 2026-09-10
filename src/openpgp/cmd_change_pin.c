@@ -42,15 +42,23 @@ int cmd_change_pin() {
             dek[IV_SIZE + i] ^= otp_key_1[i];
         }
     }
-    uint8_t dhash[33];
-    dhash[0] = apdu.nc - pin_len;
-    double_hash_pin(apdu.data + pin_len, apdu.nc - pin_len, dhash + 1);
-    file_put_data(pw, dhash, sizeof(dhash));
-
     file_t *tf = search_by_fid(EF_DEK, NULL, SPECIFY_EF);
     if (!tf) {
         return SW_REFERENCE_NOT_FOUND();
     }
+    uint16_t old_pw_len = file_get_size(pw);
+    uint16_t old_dek_len = file_get_size(tf);
+    uint8_t old_pw[64] = {0};
+    uint8_t old_dek[IV_SIZE + 32 * 4] = {0};
+    if (old_pw_len > sizeof(old_pw) || old_dek_len > sizeof(old_dek)) {
+        return SW_MEMORY_FAILURE();
+    }
+    memcpy(old_pw, file_get_data(pw), old_pw_len);
+    memcpy(old_dek, file_get_data(tf), old_dek_len);
+
+    uint8_t dhash[33];
+    dhash[0] = apdu.nc - pin_len;
+    double_hash_pin(apdu.data + pin_len, apdu.nc - pin_len, dhash + 1);
     uint8_t def[IV_SIZE + 32 + 32 + 32 + 32] = {0};
     memcpy(def, file_get_data(tf), file_get_size(tf));
     if (P2(apdu) == 0x81) {
@@ -63,7 +71,27 @@ int cmd_change_pin() {
         memcpy(def + IV_SIZE + 32 + 32, dek + IV_SIZE, 32);
         aes_encrypt_cfb_256(session_pw3, def, def + IV_SIZE + 32 + 32, 32);
     }
-    file_put_data(tf, def, sizeof(def));
+    r = file_put_data(pw, dhash, sizeof(dhash));
+    if (r == PICOKEY_OK) {
+        r = file_put_data(tf, def, sizeof(def));
+    }
+    if (r != PICOKEY_OK) {
+        int restore_pw = file_put_data(pw, old_pw, old_pw_len);
+        int restore_dek = file_put_data(tf, old_dek, old_dek_len);
+        if (restore_pw == PICOKEY_OK && restore_dek == PICOKEY_OK) {
+            low_flash_available();
+        }
+        openpgp_unload();
+        mbedtls_platform_zeroize(old_pw, sizeof(old_pw));
+        mbedtls_platform_zeroize(old_dek, sizeof(old_dek));
+        mbedtls_platform_zeroize(dhash, sizeof(dhash));
+        mbedtls_platform_zeroize(def, sizeof(def));
+        return SW_MEMORY_FAILURE();
+    }
     low_flash_available();
+    mbedtls_platform_zeroize(old_pw, sizeof(old_pw));
+    mbedtls_platform_zeroize(old_dek, sizeof(old_dek));
+    mbedtls_platform_zeroize(dhash, sizeof(dhash));
+    mbedtls_platform_zeroize(def, sizeof(def));
     return SW_OK();
 }

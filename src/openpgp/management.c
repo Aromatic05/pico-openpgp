@@ -32,7 +32,7 @@ const uint8_t man_aid[] = {
     0xa0, 0x00, 0x00, 0x05, 0x27, 0x47, 0x11, 0x17
 };
 
-extern void init_piv();
+extern int init_piv();
 int man_select(app_t *a, uint8_t force) {
     (void) force;
     a->process_apdu = man_process_apdu;
@@ -40,7 +40,8 @@ int man_select(app_t *a, uint8_t force) {
     sprintf((char *) res_APDU, "%d.%d.0", PIV_VERSION_MAJOR, PIV_VERSION_MINOR);
     res_APDU_size = strlen((char *) res_APDU);
     apdu.ne = res_APDU_size;
-    init_piv();
+    int ret = init_piv();
+    if (ret != PICOKEY_OK) return ret;
     is_gpg = false;
     return PICOKEY_OK;
 }
@@ -124,11 +125,19 @@ int cmd_read_config() {
 }
 
 int cmd_write_config() {
+    if (apdu.nc == 0) {
+        return SW_WRONG_LENGTH();
+    }
     if (apdu.data[0] != apdu.nc - 1) {
         return SW_WRONG_DATA();
     }
     file_t *ef = file_new(EF_DEV_CONF);
-    file_put_data(ef, apdu.data + 1, apdu.nc - 1);
+    if (ef == NULL) {
+        return SW_MEMORY_FAILURE();
+    }
+    if (file_put_data(ef, apdu.data + 1, apdu.nc - 1) != PICOKEY_OK) {
+        return SW_EXEC_ERROR();
+    }
     low_flash_available();
     return SW_OK();
 }
