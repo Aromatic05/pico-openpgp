@@ -47,15 +47,32 @@ int cmd_put_data() {
             if ((r = load_dek()) != PICOKEY_OK) {
                 return SW_EXEC_ERROR();
             }
+            file_t *tf = search_by_fid(EF_DEK, NULL, SPECIFY_EF);
+            file_t *status = search_by_fid(EF_PW_PRIV, NULL, SPECIFY_EF);
+            if (!file_has_data(tf) || !file_has_data(status)) {
+                return SW_REFERENCE_NOT_FOUND();
+            }
+
+            const bool had_rc = file_has_data(ef);
+            const uint16_t old_rc_len = file_get_size(ef);
+            const uint16_t old_dek_len = file_get_size(tf);
+            const uint16_t old_status_len = file_get_size(status);
+            uint8_t old_rc[64] = {0};
+            uint8_t old_dek[IV_SIZE + 32 * 4] = {0};
+            uint8_t old_status[16] = {0};
+            if (old_rc_len > sizeof(old_rc) || old_dek_len > sizeof(old_dek) ||
+                old_status_len > sizeof(old_status)) {
+                return SW_MEMORY_FAILURE();
+            }
+            if (had_rc) {
+                memcpy(old_rc, file_get_data(ef), old_rc_len);
+            }
+            memcpy(old_dek, file_get_data(tf), old_dek_len);
+            memcpy(old_status, file_get_data(status), old_status_len);
+
             uint8_t dhash[33];
             dhash[0] = apdu.nc;
             double_hash_pin(apdu.data, apdu.nc, dhash + 1);
-            r = file_put_data(ef, dhash, sizeof(dhash));
-
-            file_t *tf = search_by_fid(EF_DEK, NULL, SPECIFY_EF);
-            if (!tf) {
-                return SW_REFERENCE_NOT_FOUND();
-            }
             uint8_t def[IV_SIZE + 32 + 32 + 32 + 32];
             memcpy(def, file_get_data(tf), file_get_size(tf));
             hash_multi(apdu.data, apdu.nc, session_rc);
@@ -69,10 +86,29 @@ int cmd_put_data() {
             }
             memcpy(def + IV_SIZE + 32, dek + IV_SIZE, 32);
             aes_encrypt_cfb_256(session_rc, def, def + IV_SIZE + 32, 32);
-            r = file_put_data(tf, def, sizeof(def));
+            r = file_put_data(ef, dhash, sizeof(dhash));
             if (r == PICOKEY_OK) {
-                r = pin_reset_retries(ef, true);
+                r = file_put_data(tf, def, sizeof(def));
             }
+            if (r == PICOKEY_OK) {
+                r = pin_reset_retries_deferred(ef, true);
+            }
+            if (r != PICOKEY_OK) {
+                int rr = had_rc ? file_put_data(ef, old_rc, old_rc_len)
+                                : flash_clear_file(ef);
+                int rd = file_put_data(tf, old_dek, old_dek_len);
+                int rs = file_put_data(status, old_status, old_status_len);
+                if (rr == PICOKEY_OK && rd == PICOKEY_OK && rs == PICOKEY_OK) {
+                    low_flash_available();
+                }
+                openpgp_unload();
+            }
+            mbedtls_platform_zeroize(old_rc, sizeof(old_rc));
+            mbedtls_platform_zeroize(old_dek, sizeof(old_dek));
+            mbedtls_platform_zeroize(old_status, sizeof(old_status));
+            mbedtls_platform_zeroize(dhash, sizeof(dhash));
+            mbedtls_platform_zeroize(def, sizeof(def));
+            mbedtls_platform_zeroize(session_rc, sizeof(session_rc));
         }
         else {
             bool key_algorithm_changed =

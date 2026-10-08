@@ -34,6 +34,8 @@ int cmd_terminate_df() {
     if (reset_openpgp_storage() != PICOKEY_OK) {
         return SW_EXEC_ERROR();
     }
-    init_openpgp();
+    if (init_openpgp() != PICOKEY_OK) {
+        return SW_EXEC_ERROR();
+    }
     return SW_OK();
 }

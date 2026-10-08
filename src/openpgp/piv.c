@@ -134,9 +134,23 @@ static int x509_create_cert(void *pk_ctx, uint8_t algo, uint8_t slot, bool attes
         mbedtls_x509write_crt_set_subject_name(&ctx, buf_sname);
         mbedtls_x509write_crt_set_issuer_name(&ctx, "C=ES,O=Pico Keys,CN=Pico OpenPGP PIV Slot F9");
         file_t *ef_key = search_by_fid(EF_PIV_KEY_ATTESTATION, NULL, SPECIFY_EF);
+        if (!file_has_data(ef_key)) {
+            mbedtls_x509write_crt_free(&ctx);
+            return PICOKEY_ERR_FILE_NOT_FOUND;
+        }
         mbedtls_ecdsa_init(&actx);
-        load_private_key_ecdsa(&actx, ef_key, false);
-        mbedtls_pk_setup(&ikey, mbedtls_pk_info_from_type(MBEDTLS_PK_ECKEY));
+        ret = load_private_key_ecdsa(&actx, ef_key, false);
+        if (ret != PICOKEY_OK) {
+            mbedtls_ecdsa_free(&actx);
+            mbedtls_x509write_crt_free(&ctx);
+            return ret;
+        }
+        ret = mbedtls_pk_setup(&ikey, mbedtls_pk_info_from_type(MBEDTLS_PK_ECKEY));
+        if (ret != 0) {
+            mbedtls_ecdsa_free(&actx);
+            mbedtls_x509write_crt_free(&ctx);
+            return ret;
+        }
         ikey.pk_ctx = &actx;
         mbedtls_x509write_crt_set_issuer_key(&ctx, &ikey);
         uint8_t ver[] = {PIV_VERSION_MAJOR, PIV_VERSION_MINOR, 0};
@@ -200,7 +214,7 @@ static int x509_create_cert(void *pk_ctx, uint8_t algo, uint8_t slot, bool attes
     return ret;
 }
 
-static void scan_files_piv() {
+static int scan_files_piv() {
     scan_flash();
     file_t *ef = search_by_fid(EF_PIV_KEY_CARDMGM, NULL, SPECIFY_EF);
     if ((ef = search_by_fid(EF_PW_PRIV, NULL, SPECIFY_ANY))) {
@@ -296,29 +310,50 @@ static void scan_files_piv() {
             mbedtls_ecdsa_context ecdsa;
             mbedtls_ecdsa_init(&ecdsa);
             int r = mbedtls_ecdsa_genkey(&ecdsa, MBEDTLS_ECP_DP_SECP384R1, random_gen, NULL);
-            r = store_keys(&ecdsa, ALGO_ECDSA, EF_PIV_KEY_ATTESTATION, false);
             uint8_t cert[2048];
-            r = x509_create_cert(&ecdsa, PIV_ALGO_ECCP384, EF_PIV_KEY_ATTESTATION, false, cert, sizeof(cert));
-            ef = search_by_fid(EF_PIV_ATTESTATION, NULL, SPECIFY_ANY);
-            file_put_data(ef, cert + sizeof(cert) - r, r);
+            if (r == 0) {
+                r = x509_create_cert(&ecdsa, PIV_ALGO_ECCP384, EF_PIV_KEY_ATTESTATION, false, cert, sizeof(cert));
+            }
+            if (r <= 0 || (size_t)r > sizeof(cert)) {
+                mbedtls_ecdsa_free(&ecdsa);
+                return PICOKEY_EXEC_ERROR;
+            }
+            uint16_t cert_len = (uint16_t)r;
+            r = store_keys(&ecdsa, ALGO_ECDSA, EF_PIV_KEY_ATTESTATION, false);
             mbedtls_ecdsa_free(&ecdsa);
+            if (r != PICOKEY_OK) {
+                return r;
+            }
+            ef = search_by_fid(EF_PIV_ATTESTATION, NULL, SPECIFY_ANY);
+            if (!ef) {
+                return PICOKEY_ERR_FILE_NOT_FOUND;
+            }
+            r = file_put_data(ef, cert + sizeof(cert) - cert_len, cert_len);
+            if (r != PICOKEY_OK) {
+                return r;
+            }
         }
     }
     low_flash_available();
+    return PICOKEY_OK;
+}
+
+static void reset_piv_pin_session(void) {
+    has_pwpiv = false;
+    mbedtls_platform_zeroize(session_pwpiv, sizeof(session_pwpiv));
 }
 
 static void reset_piv_session(void) {
-    has_pwpiv = false;
+    reset_piv_pin_session();
     has_mgm = false;
     has_challenge = false;
-    mbedtls_platform_zeroize(session_pwpiv, sizeof(session_pwpiv));
     mbedtls_platform_zeroize(challenge, sizeof(challenge));
 }
 
-void init_piv() {
-    scan_files_piv();
+int init_piv() {
+    int ret = scan_files_piv();
     reset_piv_session();
-    // cmd_select();
+    return ret;
 }
 
 int piv_unload() {
@@ -357,7 +392,8 @@ int piv_select_aid(app_t *a, uint8_t force) {
     (void) force;
     a->process_apdu = piv_process_apdu;
     a->unload = piv_unload;
-    init_piv();
+    int ret = init_piv();
+    if (ret != PICOKEY_OK) return ret;
     select_piv_aid();
     return PICOKEY_OK;
 }
@@ -1118,10 +1154,14 @@ static int cmd_put_data() {
             return SW_MEMORY_FAILURE();
         }
         if (a53.len > 0) {
-            file_put_data(ef, a53.data, a53.len);
+            if (file_put_data(ef, a53.data, a53.len) != PICOKEY_OK) {
+                return SW_EXEC_ERROR();
+            }
         }
         else {
-            flash_clear_file(ef);
+            if (flash_clear_file(ef) != PICOKEY_OK) {
+                return SW_EXEC_ERROR();
+            }
         }
         low_flash_available();
     }
@@ -1212,6 +1252,71 @@ static int cmd_move_key() {
     return SW_OK();
 }
 
+typedef struct {
+    uint8_t pin[64];
+    uint16_t pin_len;
+    uint8_t puk[64];
+    uint16_t puk_len;
+    uint8_t status[16];
+    uint16_t status_len;
+    uint8_t limits[16];
+    uint16_t limits_len;
+} piv_pin_state_snapshot_t;
+
+static int piv_snapshot_file(uint16_t fid, uint8_t *out, size_t capacity, uint16_t *out_len) {
+    file_t *ef = search_by_fid(fid, NULL, SPECIFY_EF);
+    if (!file_has_data(ef)) {
+        return PICOKEY_ERR_FILE_NOT_FOUND;
+    }
+    *out_len = file_get_size(ef);
+    if (*out_len > capacity) {
+        return PICOKEY_ERR_MEMORY_FATAL;
+    }
+    memcpy(out, file_get_data(ef), *out_len);
+    return PICOKEY_OK;
+}
+
+static int piv_capture_pin_state(piv_pin_state_snapshot_t *snapshot) {
+    memset(snapshot, 0, sizeof(*snapshot));
+    int r = piv_snapshot_file(EF_PIV_PIN, snapshot->pin, sizeof(snapshot->pin), &snapshot->pin_len);
+    if (r == PICOKEY_OK) {
+        r = piv_snapshot_file(EF_PIV_PUK, snapshot->puk, sizeof(snapshot->puk), &snapshot->puk_len);
+    }
+    if (r == PICOKEY_OK) {
+        r = piv_snapshot_file(EF_PW_PRIV, snapshot->status, sizeof(snapshot->status), &snapshot->status_len);
+    }
+    if (r == PICOKEY_OK) {
+        r = piv_snapshot_file(EF_PW_RETRIES, snapshot->limits, sizeof(snapshot->limits), &snapshot->limits_len);
+    }
+    return r;
+}
+
+static int piv_restore_pin_state(const piv_pin_state_snapshot_t *snapshot) {
+    file_t *pin = search_by_fid(EF_PIV_PIN, NULL, SPECIFY_EF);
+    file_t *puk = search_by_fid(EF_PIV_PUK, NULL, SPECIFY_EF);
+    file_t *status = search_by_fid(EF_PW_PRIV, NULL, SPECIFY_EF);
+    file_t *limits = search_by_fid(EF_PW_RETRIES, NULL, SPECIFY_EF);
+    int r = file_put_data(pin, snapshot->pin, snapshot->pin_len);
+    if (r == PICOKEY_OK) r = file_put_data(puk, snapshot->puk, snapshot->puk_len);
+    if (r == PICOKEY_OK) r = file_put_data(status, snapshot->status, snapshot->status_len);
+    if (r == PICOKEY_OK) r = file_put_data(limits, snapshot->limits, snapshot->limits_len);
+    return r;
+}
+
+static void piv_clear_pin_snapshot(piv_pin_state_snapshot_t *snapshot) {
+    mbedtls_platform_zeroize(snapshot, sizeof(*snapshot));
+}
+
+static int piv_abort_pin_transaction(piv_pin_state_snapshot_t *snapshot) {
+    int r = piv_restore_pin_state(snapshot);
+    if (r == PICOKEY_OK) {
+        low_flash_available();
+    }
+    piv_clear_pin_snapshot(snapshot);
+    reset_piv_pin_session();
+    return r;
+}
+
 static int cmd_change_pin() {
     uint8_t pin_ref = P2(apdu);
     if (P1(apdu) != 0x0 || (pin_ref != 0x80 && pin_ref != 0x81)) {
@@ -1229,8 +1334,13 @@ static int cmd_change_pin() {
     uint8_t dhash[33];
     dhash[0] = pin_len;
     double_hash_pin(apdu.data + pin_data[0], pin_len, dhash + 1);
-    file_put_data(ef, dhash, sizeof(dhash));
+    if (file_put_data(ef, dhash, sizeof(dhash)) != PICOKEY_OK) {
+        mbedtls_platform_zeroize(dhash, sizeof(dhash));
+        return SW_MEMORY_FAILURE();
+    }
+    mbedtls_platform_zeroize(dhash, sizeof(dhash));
     low_flash_available();
+    reset_piv_pin_session();
     return SW_OK();
 }
 
@@ -1250,10 +1360,24 @@ static int cmd_reset_retry() {
     uint8_t dhash[33];
     dhash[0] = pin_len;
     double_hash_pin(apdu.data + puk_data[0], pin_len, dhash + 1);
+    piv_pin_state_snapshot_t snapshot;
+    if (piv_capture_pin_state(&snapshot) != PICOKEY_OK) {
+        mbedtls_platform_zeroize(dhash, sizeof(dhash));
+        return SW_MEMORY_FAILURE();
+    }
     ef = search_by_fid(EF_PIV_PIN, NULL, SPECIFY_ANY);
-    file_put_data(ef, dhash, sizeof(dhash));
-    pin_reset_retries(ef, true);
+    int r = file_put_data(ef, dhash, sizeof(dhash));
+    if (r == PICOKEY_OK) {
+        r = pin_reset_retries_deferred(ef, true);
+    }
+    mbedtls_platform_zeroize(dhash, sizeof(dhash));
+    if (r != PICOKEY_OK) {
+        (void)piv_abort_pin_transaction(&snapshot);
+        return SW_MEMORY_FAILURE();
+    }
+    piv_clear_pin_snapshot(&snapshot);
     low_flash_available();
+    reset_piv_pin_session();
     return SW_OK();
 }
 
@@ -1265,28 +1389,41 @@ static int cmd_set_retries() {
     if (!file_has_data(ef) || file_get_size(ef) != 6) {
         return SW_MEMORY_FAILURE();
     }
+    piv_pin_state_snapshot_t snapshot;
+    if (piv_capture_pin_state(&snapshot) != PICOKEY_OK) {
+        return SW_MEMORY_FAILURE();
+    }
     uint8_t tmp[6];
     memcpy(tmp, file_get_data(ef), sizeof(tmp));
     tmp[4] = P1(apdu);
     tmp[5] = P2(apdu);
-    file_put_data(ef, tmp, sizeof(tmp));
+    int r = file_put_data(ef, tmp, sizeof(tmp));
 
     ef = search_by_fid(EF_PIV_PIN, NULL, SPECIFY_ANY);
     const uint8_t def_pin[8] = { 0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0xFF, 0xFF };
     uint8_t dhash[33];
     dhash[0] = sizeof(def_pin);
     double_hash_pin(def_pin, sizeof(def_pin), dhash + 1);
-    file_put_data(ef, dhash, sizeof(dhash));
-    pin_reset_retries(ef, true);
+    if (r == PICOKEY_OK) r = file_put_data(ef, dhash, sizeof(dhash));
+    if (r == PICOKEY_OK) r = pin_reset_retries_deferred(ef, true);
 
     ef = search_by_fid(EF_PIV_PUK, NULL, SPECIFY_ANY);
     const uint8_t def_puk[8] = {0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x37, 0x38};
     dhash[0] = sizeof(def_puk);
     double_hash_pin(def_puk, sizeof(def_puk), dhash + 1);
-    file_put_data(ef, dhash, sizeof(dhash));
-    pin_reset_retries(ef, true);
+    if (r == PICOKEY_OK) r = file_put_data(ef, dhash, sizeof(dhash));
+    if (r == PICOKEY_OK) r = pin_reset_retries_deferred(ef, true);
 
+    mbedtls_platform_zeroize(tmp, sizeof(tmp));
+    mbedtls_platform_zeroize(dhash, sizeof(dhash));
+    if (r != PICOKEY_OK) {
+        (void)piv_abort_pin_transaction(&snapshot);
+        return SW_MEMORY_FAILURE();
+    }
+
+    piv_clear_pin_snapshot(&snapshot);
     low_flash_available();
+    reset_piv_pin_session();
     return SW_OK();
 }
 
@@ -1306,7 +1443,7 @@ static int cmd_reset() {
     if (reset_piv_storage() != PICOKEY_OK) {
         return SW_EXEC_ERROR();
     }
-    init_piv();
+    if (init_piv() != PICOKEY_OK) return SW_EXEC_ERROR();
     return SW_OK();
 }
 

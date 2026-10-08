@@ -97,8 +97,9 @@ void select_file(file_t *pe) {
     }
 }
 
-void scan_files_openpgp() {
+int scan_files_openpgp() {
     scan_flash();
+    int ret = PICOKEY_OK;
     file_t *ef;
     if ((ef = search_by_fid(EF_FULL_AID, NULL, SPECIFY_ANY))) {
         ef->data = openpgp_aid_full;
@@ -126,7 +127,11 @@ void scan_files_openpgp() {
             hash_multi(def3, sizeof(def3), session_pw3);
             aes_encrypt_cfb_256(session_pw3, def, def + IV_SIZE + 32 + 32, 32);
             memset(session_pw3, 0, sizeof(session_pw3));
-            file_put_data(ef, def, sizeof(def));
+            ret = file_put_data(ef, def, sizeof(def));
+            mbedtls_platform_zeroize(def, sizeof(def));
+            if (ret != PICOKEY_OK) {
+                goto init_done;
+            }
             reset_dek = true;
         }
     }
@@ -137,7 +142,11 @@ void scan_files_openpgp() {
             uint8_t dhash[33];
             dhash[0] = sizeof(def);
             double_hash_pin(def, sizeof(def), dhash + 1);
-            file_put_data(ef, dhash, sizeof(dhash));
+            ret = file_put_data(ef, dhash, sizeof(dhash));
+            mbedtls_platform_zeroize(dhash, sizeof(dhash));
+            if (ret != PICOKEY_OK) {
+                goto init_done;
+            }
         }
     }
     bool migrated_legacy_default_rc = false;
@@ -145,7 +154,10 @@ void scan_files_openpgp() {
         if (reset_dek && file_has_data(ef)) {
             /* OpenPGP Card 3.4 requires RC to be empty by default. A newly
              * generated DEK invalidates any old RC wrapper as well. */
-            flash_clear_file(ef);
+            ret = flash_clear_file(ef);
+            if (ret != PICOKEY_OK) {
+                goto init_done;
+            }
         }
         else if (file_has_data(ef) && file_get_size(ef) == 33) {
             /* Older pico-openpgp firmware materialized the public value
@@ -167,10 +179,16 @@ void scan_files_openpgp() {
                     uint16_t record_len = file_get_size(dek_ef);
                     memcpy(record, file_get_data(dek_ef), record_len);
                     memcpy(record + IV_SIZE + 32, random_bytes_get(32), 32);
-                    file_put_data(dek_ef, record, record_len);
+                    ret = file_put_data(dek_ef, record, record_len);
                     mbedtls_platform_zeroize(record, sizeof(record));
+                    if (ret != PICOKEY_OK) {
+                        goto init_done;
+                    }
                 }
-                flash_clear_file(ef);
+                ret = flash_clear_file(ef);
+                if (ret != PICOKEY_OK) {
+                    goto init_done;
+                }
                 migrated_legacy_default_rc = true;
             }
             mbedtls_platform_zeroize(legacy_hash, sizeof(legacy_hash));
@@ -184,21 +202,31 @@ void scan_files_openpgp() {
             uint8_t dhash[33];
             dhash[0] = sizeof(def);
             double_hash_pin(def, sizeof(def), dhash + 1);
-            file_put_data(ef, dhash, sizeof(dhash));
+            ret = file_put_data(ef, dhash, sizeof(dhash));
+            mbedtls_platform_zeroize(dhash, sizeof(dhash));
+            if (ret != PICOKEY_OK) {
+                goto init_done;
+            }
         }
     }
     if ((ef = search_by_fid(EF_SIG_COUNT, NULL, SPECIFY_ANY))) {
         if (!ef->data) {
             printf("SigCount is empty. Initializing to zero\r\n");
             const uint8_t def[3] = { 0 };
-            file_put_data(ef, def, sizeof(def));
+            ret = file_put_data(ef, def, sizeof(def));
+            if (ret != PICOKEY_OK) {
+                goto init_done;
+            }
         }
     }
     if ((ef = search_by_fid(EF_PW_PRIV, NULL, SPECIFY_ANY))) {
         if (!ef->data) {
             printf("PW status is empty. Initializing to default\r\n");
             const uint8_t def[] = { 0x1, 127, 127, 127, 3, 0, 3 };
-            file_put_data(ef, def, sizeof(def));
+            ret = file_put_data(ef, def, sizeof(def));
+            if (ret != PICOKEY_OK) {
+                goto init_done;
+            }
         }
     }
     /* Migrate cards written by older firmware that materialized a public
@@ -211,54 +239,81 @@ void scan_files_openpgp() {
         file_get_size(pw_status) >= 7 && file_get_data(pw_status)[5] != 0) {
         uint8_t status[64];
         uint16_t status_len = file_get_size(pw_status);
+        if (status_len > sizeof(status)) {
+            ret = PICOKEY_ERR_MEMORY_FATAL;
+            goto init_done;
+        }
         memcpy(status, file_get_data(pw_status), status_len);
         status[5] = 0;
-        file_put_data(pw_status, status, status_len);
+        ret = file_put_data(pw_status, status, status_len);
         mbedtls_platform_zeroize(status, sizeof(status));
+        if (ret != PICOKEY_OK) {
+            goto init_done;
+        }
     }
     if ((ef = search_by_fid(EF_UIF_SIG, NULL, SPECIFY_ANY))) {
         if (!ef->data) {
             printf("UIF SIG is empty. Initializing to default\r\n");
             const uint8_t def[] = { 0x0, 0x20 };
-            file_put_data(ef, def, sizeof(def));
+            ret = file_put_data(ef, def, sizeof(def));
+            if (ret != PICOKEY_OK) {
+                goto init_done;
+            }
         }
     }
     if ((ef = search_by_fid(EF_UIF_DEC, NULL, SPECIFY_ANY))) {
         if (!ef->data) {
             printf("UIF DEC is empty. Initializing to default\r\n");
             const uint8_t def[] = { 0x0, 0x20 };
-            file_put_data(ef, def, sizeof(def));
+            ret = file_put_data(ef, def, sizeof(def));
+            if (ret != PICOKEY_OK) {
+                goto init_done;
+            }
         }
     }
     if ((ef = search_by_fid(EF_UIF_AUT, NULL, SPECIFY_ANY))) {
         if (!ef->data) {
             printf("UIF AUT is empty. Initializing to default\r\n");
             const uint8_t def[] = { 0x0, 0x20 };
-            file_put_data(ef, def, sizeof(def));
+            ret = file_put_data(ef, def, sizeof(def));
+            if (ret != PICOKEY_OK) {
+                goto init_done;
+            }
         }
     }
     if ((ef = search_by_fid(EF_KDF, NULL, SPECIFY_ANY))) {
         if (!ef->data) {
             printf("KDF is empty. Initializing to default\r\n");
             const uint8_t def[] = { 0x81, 0x1, 0x0 };
-            file_put_data(ef, def, sizeof(def));
+            ret = file_put_data(ef, def, sizeof(def));
+            if (ret != PICOKEY_OK) {
+                goto init_done;
+            }
         }
     }
     if ((ef = search_by_fid(EF_SEX, NULL, SPECIFY_ANY))) {
         if (!ef->data) {
             printf("Sex is empty. Initializing to default\r\n");
             const uint8_t def[] = { 0x30 };
-            file_put_data(ef, def, sizeof(def));
+            ret = file_put_data(ef, def, sizeof(def));
+            if (ret != PICOKEY_OK) {
+                goto init_done;
+            }
         }
     }
     if ((ef = search_by_fid(EF_PW_RETRIES, NULL, SPECIFY_ANY))) {
         if (!ef->data) {
             printf("PW retries is empty. Initializing to default\r\n");
             const uint8_t def[] = { 0x1, 3, 3, 3 };
-            file_put_data(ef, def, sizeof(def));
+            ret = file_put_data(ef, def, sizeof(def));
+            if (ret != PICOKEY_OK) {
+                goto init_done;
+            }
         }
     }
+init_done:
     low_flash_available();
+    return ret;
 }
 
 void release_dek() {
@@ -336,14 +391,15 @@ static void reset_openpgp_session(void) {
     release_dek();
 }
 
-void init_openpgp() {
+int init_openpgp() {
     reset_openpgp_session();
     algo_dec = EF_ALGO_PRIV2;
     algo_aut = EF_ALGO_PRIV3;
     pk_dec = EF_PK_DEC;
     pk_aut = EF_PK_AUT;
-    scan_files_openpgp();
+    int ret = scan_files_openpgp();
     //cmd_select();
+    return ret;
 }
 
 int openpgp_unload() {
@@ -369,9 +425,12 @@ int heapLeft() {
 
 int openpgp_select_aid(app_t *a, uint8_t force) {
     (void) force;
+    int ret = init_openpgp();
+    if (ret != PICOKEY_OK) {
+        return ret;
+    }
     a->process_apdu = openpgp_process_apdu;
     a->unload = openpgp_unload;
-    init_openpgp();
     process_fci(file_openpgp, 1);
     memcpy(res_APDU + res_APDU_size, "\x64\x06\x53\x04", 4);
     res_APDU_size += 4;
@@ -390,7 +449,7 @@ INITIALIZER( openpgp_ctor ) {
     register_app(openpgp_select_aid, openpgp_aid);
 }
 
-int pin_reset_retries(const file_t *pin, bool force) {
+static int pin_reset_retries_impl(const file_t *pin, bool force, bool publish) {
     if (!pin) {
         return PICOKEY_ERR_NULL_PARAM;
     }
@@ -411,8 +470,18 @@ int pin_reset_retries(const file_t *pin, bool force) {
     uint8_t max_retries = file_get_data(pw_retries)[(pin->fid & 0xf)];
     p[3 + (pin->fid & 0xf)] = max_retries;
     int r = file_put_data(pw_status, p, file_get_size(pw_status));
-    low_flash_available();
+    if (r == PICOKEY_OK && publish) {
+        low_flash_available();
+    }
     return r;
+}
+
+int pin_reset_retries(const file_t *pin, bool force) {
+    return pin_reset_retries_impl(pin, force, true);
+}
+
+int pin_reset_retries_deferred(const file_t *pin, bool force) {
+    return pin_reset_retries_impl(pin, force, false);
 }
 
 int pin_wrong_retry(const file_t *pin) {

@@ -65,6 +65,23 @@ int cmd_reset_retry() {
         if (!tf) {
             return SW_REFERENCE_NOT_FOUND();
         }
+        file_t *status = search_by_fid(EF_PW_PRIV, NULL, SPECIFY_EF);
+        if (!file_has_data(status)) {
+            return SW_REFERENCE_NOT_FOUND();
+        }
+        uint16_t old_dek_len = file_get_size(tf);
+        uint16_t old_pw_len = file_get_size(pw);
+        uint16_t old_status_len = file_get_size(status);
+        uint8_t old_dek[IV_SIZE + 32 * 4] = {0};
+        uint8_t old_pw[64] = {0};
+        uint8_t old_status[16] = {0};
+        if (old_dek_len > sizeof(old_dek) || old_pw_len > sizeof(old_pw) ||
+            old_status_len > sizeof(old_status)) {
+            return SW_MEMORY_FAILURE();
+        }
+        memcpy(old_dek, file_get_data(tf), old_dek_len);
+        memcpy(old_pw, file_get_data(pw), old_pw_len);
+        memcpy(old_status, file_get_data(status), old_status_len);
         if (otp_key_1) {
             for (int i = 0; i < 32; i++) {
                 dek[IV_SIZE + i] ^= otp_key_1[i];
@@ -80,14 +97,43 @@ int cmd_reset_retry() {
         uint8_t dhash[33];
         dhash[0] = newpin_len;
         double_hash_pin(apdu.data + (apdu.nc - newpin_len), newpin_len, dhash + 1);
-        file_put_data(pw, dhash, sizeof(dhash));
-        if (pin_reset_retries(pw, true) != PICOKEY_OK) {
+        if (r == PICOKEY_OK) {
+            r = file_put_data(pw, dhash, sizeof(dhash));
+        }
+        if (r == PICOKEY_OK) {
+            r = pin_reset_retries_deferred(pw, true);
+        }
+
+        /* Validate the newly wrapped PW1 before publishing any of the three
+         * persistent mutations. RESET RETRY COUNTER should not leave an
+         * authenticated session behind regardless of the authorization path. */
+        if (r == PICOKEY_OK) {
+            has_pw1 = true;
+            has_pw2 = has_pw3 = has_rc = false;
+            r = load_dek();
+        }
+        if (r != PICOKEY_OK) {
+            int rd = file_put_data(tf, old_dek, old_dek_len);
+            int rp = file_put_data(pw, old_pw, old_pw_len);
+            int rs = file_put_data(status, old_status, old_status_len);
+            if (rd == PICOKEY_OK && rp == PICOKEY_OK && rs == PICOKEY_OK) {
+                low_flash_available();
+            }
+            openpgp_unload();
+            mbedtls_platform_zeroize(old_dek, sizeof(old_dek));
+            mbedtls_platform_zeroize(old_pw, sizeof(old_pw));
+            mbedtls_platform_zeroize(old_status, sizeof(old_status));
+            mbedtls_platform_zeroize(def, sizeof(def));
+            mbedtls_platform_zeroize(dhash, sizeof(dhash));
             return SW_MEMORY_FAILURE();
         }
+        openpgp_unload();
         low_flash_available();
-        if ((r = load_dek()) != PICOKEY_OK) {
-            return SW_EXEC_ERROR();
-        }
+        mbedtls_platform_zeroize(old_dek, sizeof(old_dek));
+        mbedtls_platform_zeroize(old_pw, sizeof(old_pw));
+        mbedtls_platform_zeroize(old_status, sizeof(old_status));
+        mbedtls_platform_zeroize(def, sizeof(def));
+        mbedtls_platform_zeroize(dhash, sizeof(dhash));
         return SW_OK();
     }
     return SW_INCORRECT_P1P2();

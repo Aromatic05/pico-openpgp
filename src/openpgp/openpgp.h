@@ -55,6 +55,8 @@ extern int rsa_sign(mbedtls_rsa_context *ctx,
 extern int load_private_key_rsa(mbedtls_rsa_context *ctx, file_t *fkey, bool use_dek);
 extern int load_private_key_ecdsa(mbedtls_ecdsa_context *ctx, file_t *fkey, bool use_dek);
 extern int pin_reset_retries(const file_t *pin, bool force);
+extern int pin_reset_retries_deferred(const file_t *pin, bool force);
+extern int openpgp_unload(void);
 
 #define ALGO_RSA        0x01
 #define ALGO_ECDH       0x12
@@ -73,13 +75,13 @@ extern mbedtls_ecp_group_id get_ec_group_id_from_attr(const uint8_t *algo, size_
 extern int reset_sig_count();
 extern uint16_t algo_dec, algo_aut, pk_dec, pk_aut;
 extern bool wait_button_pressed_fid(uint16_t fid);
-extern void scan_files_openpgp();
+extern int scan_files_openpgp();
 extern int load_aes_key(uint8_t *aes_key, file_t *fkey);
 extern int inc_sig_count();
 extern int dek_encrypt(uint8_t *data, size_t len);
 extern int dek_decrypt(uint8_t *data, size_t len);
-extern void init_openpgp();
-extern void init_piv();
+extern int init_openpgp();
+extern int init_piv();
 extern int reset_openpgp_storage();
 extern int reset_piv_storage();
 extern int piv_prepare_device_reset(void);
