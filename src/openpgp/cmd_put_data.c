@@ -63,7 +63,22 @@ int cmd_put_data() {
             r = file_put_data(tf, def, sizeof(def));
         }
         else {
+            bool key_algorithm_changed =
+                (fid == EF_ALGO_PRIV1 || fid == EF_ALGO_PRIV2 || fid == EF_ALGO_PRIV3) &&
+                (!file_has_data(ef) || file_get_size(ef) != apdu.nc ||
+                 memcmp(file_get_data(ef), apdu.data, apdu.nc) != 0);
             r = file_put_data(ef, apdu.data, apdu.nc);
+            if (r == PICOKEY_OK && key_algorithm_changed) {
+                const uint16_t key_fid = EF_PK_SIG + (fid - EF_ALGO_PRIV1);
+                const uint16_t public_fid = EF_PB_SIG + (fid - EF_ALGO_PRIV1);
+                file_t *private_key = search_by_fid(key_fid, NULL, SPECIFY_EF);
+                file_t *public_key = search_by_fid(public_fid, NULL, SPECIFY_EF);
+                if (!private_key || !public_key ||
+                    flash_clear_file(private_key) != PICOKEY_OK ||
+                    flash_clear_file(public_key) != PICOKEY_OK) {
+                    return SW_MEMORY_FAILURE();
+                }
+            }
         }
         if (r != PICOKEY_OK) {
             return SW_MEMORY_FAILURE();

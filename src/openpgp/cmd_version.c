@@ -19,8 +19,12 @@
 #include "version.h"
 
 int cmd_version_openpgp() {
-    res_APDU[res_APDU_size++] = PIPGP_VERSION_MAJOR;
-    res_APDU[res_APDU_size++] = PIPGP_VERSION_MINOR;
+    // INS F1 is the YubiKey compatibility version consumed by YubiKit.
+    // Report the same 5.7 profile as the other applets so the client
+    // reads the real OpenPGP 0xFA Algorithm Information instead of
+    // assuming firmware 4.4 only supports RSA-2048.
+    res_APDU[res_APDU_size++] = PIV_VERSION_MAJOR;
+    res_APDU[res_APDU_size++] = PIV_VERSION_MINOR;
     res_APDU[res_APDU_size++] = 0x0;
     return SW_OK();
 }

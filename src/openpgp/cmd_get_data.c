@@ -49,7 +49,12 @@ int cmd_get_data() {
         uint16_t tg_len = 0;
         asn1_ctx_t ctxi;
         asn1_ctx_init(res_APDU, data_len, &ctxi);
-        if (walk_tlv(&ctxi, &p, &tg, &tg_len, NULL)) {
+        /* Keep the constructed 6E/7A/FA templates and the nested KDF F9 value
+         * (81 01 00 for KDF disabled). The generic single-TLV unwrapping
+         * otherwise strips 81 from F9 and breaks the PIN client. */
+        bool keep_tlv = fid == EF_APP_DATA || fid == EF_SEC_TPL ||
+                        fid == EF_ALGO_INFO || fid == EF_KDF;
+        if (!keep_tlv && walk_tlv(&ctxi, &p, &tg, &tg_len, NULL)) {
             uint8_t dec = 2;
             if ((tg & 0x1f) == 0x1f) {
                 dec++;
@@ -63,7 +68,7 @@ int cmd_get_data() {
                 res_APDU_size -= dec;
             }
         }
-        if (is_gpg == false) {
+        if (!keep_tlv && is_gpg == false) {
             uint8_t off = 2;
             if (P1(apdu) > 0x0) {
                 off++;

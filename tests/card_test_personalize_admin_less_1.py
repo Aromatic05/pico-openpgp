@@ -88,14 +88,14 @@ class Test_Card_Personalize_Adminless_FIRST(object):
 
     def test_ds_counter_0(self, card):
         c = get_data_object(card, 0x7a)
-        assert c == b'\x93\x03\x00\x00\x00'
+        assert c == expected_security_support_template(card, 0)
 
     def test_pw1_status(self, card):
         s = get_data_object(card, 0xc4)
         assert match(b'\x01...\x03[\x00\x03]\x03', s, DOTALL)
 
     def test_app_data(self, card):
-        app_data = get_data_object(card, 0x6e)
+        app_data = get_constructed_app_data(card)
         hist_len = app_data[20]
         # FIXME: parse and check DO of C0, C1, C2, C3, C4, and C6
         assert app_data[0:8] == b"\x4f\x10\xd2\x76\x00\x01\x24\x01" and \

@@ -28,4 +28,4 @@ from constants_for_test import *
 class Test_Card_DS_Counter(object):
     def test_ds_counter_1(self, card):
         c = get_data_object(card, 0x7a)
-        assert c == b'\x93\x03\x00\x00\x01'
+        assert c == expected_security_support_template(card, 1)

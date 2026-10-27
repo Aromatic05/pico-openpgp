@@ -44,3 +44,19 @@ def get_data_object(card, tag):
 
 def check_null(data_object):
     return data_object == None or len(data_object) == 0
+
+
+def expected_security_support_template(card, counter):
+    """GET DATA 7A is a constructed TLV; the legacy YubiKey helper unwraps it."""
+    nested = b"\x93\x03" + counter.to_bytes(3, "big")
+    return nested if card.is_yubikey else b"\x7a\x05" + nested
+
+
+def get_constructed_app_data(card):
+    """Require a complete OpenPGP 6E template and return its content for legacy tests."""
+    raw = card.cmd_get_data(0, 0x6e)
+    assert raw is not None and raw[0:1] == b"\x6e", "GET DATA 6E missing constructed tag"
+    value = skip_tag_if_any(0, 0x6e, raw)
+    assert value != raw, "GET DATA 6E was not unwrapped"
+    assert value[0:2] == b"\x4f\x10", (len(value), value[:24].hex())
+    return value

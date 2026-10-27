@@ -126,15 +126,6 @@ int parse_keyinfo(const file_t *f, int mode) {
         res_APDU[res_APDU_size++] = 6;
     }
     file_t *ef = search_by_fid(EF_PK_SIG, NULL, SPECIFY_ANY);
-    res_APDU[res_APDU_size++] = 0x00;
-    if (ef && ef->data) {
-        res_APDU[res_APDU_size++] = 0x01;
-    }
-    else {
-        res_APDU[res_APDU_size++] = 0x00;
-    }
-
-    ef = search_by_fid(EF_PK_DEC, NULL, SPECIFY_ANY);
     res_APDU[res_APDU_size++] = 0x01;
     if (ef && ef->data) {
         res_APDU[res_APDU_size++] = 0x01;
@@ -143,8 +134,17 @@ int parse_keyinfo(const file_t *f, int mode) {
         res_APDU[res_APDU_size++] = 0x00;
     }
 
-    ef = search_by_fid(EF_PK_AUT, NULL, SPECIFY_ANY);
+    ef = search_by_fid(EF_PK_DEC, NULL, SPECIFY_ANY);
     res_APDU[res_APDU_size++] = 0x02;
+    if (ef && ef->data) {
+        res_APDU[res_APDU_size++] = 0x01;
+    }
+    else {
+        res_APDU[res_APDU_size++] = 0x00;
+    }
+
+    ef = search_by_fid(EF_PK_AUT, NULL, SPECIFY_ANY);
+    res_APDU[res_APDU_size++] = 0x03;
     if (ef && ef->data) {
         res_APDU[res_APDU_size++] = 0x01;
     }
@@ -169,18 +169,20 @@ int parse_pw_status(const file_t *f, int mode) {
     return res_APDU_size - init_len;
 }
 
+#ifdef MBEDTLS_ECP_DP_CURVE448_ENABLED
 const uint8_t algorithm_attr_x448[] = {
     4,
     ALGO_ECDH,
     /* OID of X448 */
     0x2b, 0x65, 0x6f
 };
+#endif
 
 const uint8_t algorithm_attr_rsa1k[] = {
     6,
     ALGO_RSA,
     0x04, 0x00,       /* Length modulus (in bit): 1024 */
-    0x00, 0x20,       /* Length exponent (in bit): 32  */
+    0x00, 0x11,       /* Length exponent (in bit): 17 (65537) */
     0x00          /* 0: Acceptable format is: P and Q */
 };
 
@@ -188,7 +190,7 @@ const uint8_t algorithm_attr_rsa2k[] = {
     6,
     ALGO_RSA,
     0x08, 0x00,       /* Length modulus (in bit): 2048 */
-    0x00, 0x20,       /* Length exponent (in bit): 32  */
+    0x00, 0x11,       /* Length exponent (in bit): 17 (65537) */
     0x00          /* 0: Acceptable format is: P and Q */
 };
 
@@ -196,7 +198,7 @@ const uint8_t algorithm_attr_rsa3k[] = {
     6,
     ALGO_RSA,
     0x0C, 0x00,       /* Length modulus (in bit): 3072 */
-    0x00, 0x20,       /* Length exponent (in bit): 32  */
+    0x00, 0x11,       /* Length exponent (in bit): 17 (65537) */
     0x00          /* 0: Acceptable format is: P and Q */
 };
 
@@ -204,7 +206,7 @@ const uint8_t algorithm_attr_rsa4k[] = {
     6,
     ALGO_RSA,
     0x10, 0x00,       /* Length modulus (in bit): 4096 */
-    0x00, 0x20,       /* Length exponent (in bit): 32  */
+    0x00, 0x11,       /* Length exponent (in bit): 17 (65537) */
     0x00          /* 0: Acceptable format is: P and Q */
 };
 
@@ -256,13 +258,15 @@ const uint8_t algorithm_attr_cv25519[] = {
     0x2b, 0x06, 0x01, 0x04, 0x01, 0x97, 0x55, 0x01, 0x05, 0x01
 };
 
-#ifdef MBEDTLS_EDDSA_C
+#if defined(MBEDTLS_EDDSA_C) && defined(MBEDTLS_ECP_DP_ED25519_ENABLED)
 const uint8_t algorithm_attr_ed25519[] = {
     10,
     ALGO_EDDSA,
     0x2b, 0x06, 0x01, 0x04, 0x01, 0xda, 0x47, 0x0f, 0x01
 };
+#endif
 
+#if defined(MBEDTLS_EDDSA_C) && defined(MBEDTLS_ECP_DP_ED448_ENABLED)
 const uint8_t algorithm_attr_ed448[] = {
     4,
     ALGO_EDDSA,
@@ -295,8 +299,10 @@ int parse_algoinfo(const file_t *f, int mode) {
         datalen += parse_algo(algorithm_attr_bp256r1, EF_ALGO_SIG);
         datalen += parse_algo(algorithm_attr_bp384r1, EF_ALGO_SIG);
         datalen += parse_algo(algorithm_attr_bp512r1, EF_ALGO_SIG);
-#ifdef MBEDTLS_EDDSA_C
+#if defined(MBEDTLS_EDDSA_C) && defined(MBEDTLS_ECP_DP_ED25519_ENABLED)
         datalen += parse_algo(algorithm_attr_ed25519, EF_ALGO_SIG);
+#endif
+#if defined(MBEDTLS_EDDSA_C) && defined(MBEDTLS_ECP_DP_ED448_ENABLED)
         datalen += parse_algo(algorithm_attr_ed448, EF_ALGO_SIG);
 #endif
 
@@ -312,7 +318,9 @@ int parse_algoinfo(const file_t *f, int mode) {
         datalen += parse_algo(algorithm_attr_bp384r1, EF_ALGO_DEC);
         datalen += parse_algo(algorithm_attr_bp512r1, EF_ALGO_DEC);
         datalen += parse_algo(algorithm_attr_cv25519, EF_ALGO_DEC);
+#ifdef MBEDTLS_ECP_DP_CURVE448_ENABLED
         datalen += parse_algo(algorithm_attr_x448, EF_ALGO_DEC);
+#endif
 
         datalen += parse_algo(algorithm_attr_rsa1k, EF_ALGO_AUT);
         datalen += parse_algo(algorithm_attr_rsa2k, EF_ALGO_AUT);
@@ -325,8 +333,10 @@ int parse_algoinfo(const file_t *f, int mode) {
         datalen += parse_algo(algorithm_attr_bp256r1, EF_ALGO_AUT);
         datalen += parse_algo(algorithm_attr_bp384r1, EF_ALGO_AUT);
         datalen += parse_algo(algorithm_attr_bp512r1, EF_ALGO_AUT);
-#ifdef MBEDTLS_EDDSA_C
+#if defined(MBEDTLS_EDDSA_C) && defined(MBEDTLS_ECP_DP_ED25519_ENABLED)
         datalen += parse_algo(algorithm_attr_ed25519, EF_ALGO_AUT);
+#endif
+#if defined(MBEDTLS_EDDSA_C) && defined(MBEDTLS_ECP_DP_ED448_ENABLED)
         datalen += parse_algo(algorithm_attr_ed448, EF_ALGO_AUT);
 #endif
         uint16_t lpdif = res_APDU + res_APDU_size - lp - 2;
@@ -357,8 +367,8 @@ int parse_algoinfo(const file_t *f, int mode) {
 
 int parse_app_data(const file_t *f, int mode) {
     uint16_t fids[] = {
-        6,
-        EF_FULL_AID, EF_HIST_BYTES, EF_EXLEN_INFO, EF_GFM, EF_DISCRETE_DO, EF_KEY_INFO
+        5,
+        EF_FULL_AID, EF_HIST_BYTES, EF_EXLEN_INFO, EF_GFM, EF_DISCRETE_DO
     };
     res_APDU[res_APDU_size++] = EF_APP_DATA & 0xff;
     res_APDU[res_APDU_size++] = 0x82;
@@ -373,9 +383,9 @@ int parse_app_data(const file_t *f, int mode) {
 
 int parse_discrete_do(const file_t *f, int mode) {
     uint16_t fids[] = {
-        11,
+        12,
         EF_EXT_CAP, EF_ALGO_SIG, EF_ALGO_DEC, EF_ALGO_AUT, EF_PW_STATUS, EF_FP, EF_CA_FP, EF_TS_ALL,
-        EF_UIF_SIG, EF_UIF_DEC, EF_UIF_AUT
+        EF_UIF_SIG, EF_UIF_DEC, EF_UIF_AUT, EF_KEY_INFO
     };
     res_APDU[res_APDU_size++] = EF_DISCRETE_DO & 0xff;
     res_APDU[res_APDU_size++] = 0x82;
