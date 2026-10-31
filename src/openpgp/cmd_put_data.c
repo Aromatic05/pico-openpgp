@@ -102,6 +102,7 @@ int cmd_put_data() {
                     low_flash_available();
                 }
                 openpgp_unload();
+                openpgp_revoke_auth_sessions();
             }
             mbedtls_platform_zeroize(old_rc, sizeof(old_rc));
             mbedtls_platform_zeroize(old_dek, sizeof(old_dek));
@@ -132,6 +133,9 @@ int cmd_put_data() {
             return SW_MEMORY_FAILURE();
         }
         low_flash_available();
+        if (fid == EF_RC) {
+            openpgp_revoke_auth_sessions();
+        }
     }
     return SW_OK();
 }

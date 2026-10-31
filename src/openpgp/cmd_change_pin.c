@@ -28,6 +28,9 @@ int cmd_change_pin() {
         return SW_REFERENCE_NOT_FOUND();
     }
     uint8_t pin_len = file_get_data(pw)[0];
+    if (apdu.nc <= pin_len) {
+        return SW_WRONG_LENGTH();
+    }
     uint16_t r = 0;
     r = check_pin(pw, apdu.data, pin_len);
     if (r != 0x9000) {
@@ -82,6 +85,7 @@ int cmd_change_pin() {
             low_flash_available();
         }
         openpgp_unload();
+        openpgp_revoke_auth_sessions();
         mbedtls_platform_zeroize(old_pw, sizeof(old_pw));
         mbedtls_platform_zeroize(old_dek, sizeof(old_dek));
         mbedtls_platform_zeroize(dhash, sizeof(dhash));
@@ -89,6 +93,7 @@ int cmd_change_pin() {
         return SW_MEMORY_FAILURE();
     }
     low_flash_available();
+    openpgp_revoke_auth_sessions();
     mbedtls_platform_zeroize(old_pw, sizeof(old_pw));
     mbedtls_platform_zeroize(old_dek, sizeof(old_dek));
     mbedtls_platform_zeroize(dhash, sizeof(dhash));

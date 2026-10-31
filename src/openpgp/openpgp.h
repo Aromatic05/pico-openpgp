@@ -30,14 +30,29 @@
 #include "crypto_utils.h"
 #include "files.h"
 
-extern bool has_pw1;
-extern bool has_pw2;
-extern bool has_pw3;
-extern bool has_rc;
-extern uint8_t session_pw1[32];
-extern uint8_t session_rc[32];
-extern uint8_t session_pw3[32];
-extern uint8_t dek[IV_SIZE + 32];
+typedef struct {
+    bool has_pw1;
+    bool has_pw2;
+    bool has_pw3;
+    bool has_rc;
+    uint8_t session_pw1[32];
+    uint8_t session_rc[32];
+    uint8_t session_pw3[32];
+    uint8_t dek[IV_SIZE + 32];
+} openpgp_session_auth_t;
+
+extern openpgp_session_auth_t *openpgp_active_auth(void);
+extern void openpgp_reset_all_sessions(void);
+extern void openpgp_revoke_auth_sessions(void);
+
+#define has_pw1 (openpgp_active_auth()->has_pw1)
+#define has_pw2 (openpgp_active_auth()->has_pw2)
+#define has_pw3 (openpgp_active_auth()->has_pw3)
+#define has_rc (openpgp_active_auth()->has_rc)
+#define session_pw1 (openpgp_active_auth()->session_pw1)
+#define session_rc (openpgp_active_auth()->session_rc)
+#define session_pw3 (openpgp_active_auth()->session_pw3)
+#define dek (openpgp_active_auth()->dek)
 
 extern int store_keys(void *key_ctx, int type, uint16_t key_id, bool use_kek);
 extern void make_rsa_response(mbedtls_rsa_context *rsa);
@@ -57,6 +72,9 @@ extern int load_private_key_ecdsa(mbedtls_ecdsa_context *ctx, file_t *fkey, bool
 extern int pin_reset_retries(const file_t *pin, bool force);
 extern int pin_reset_retries_deferred(const file_t *pin, bool force);
 extern int openpgp_unload(void);
+extern bool piv_pin_is_verified(void);
+extern const uint8_t *piv_pin_session_key(void);
+extern void piv_reset_all_sessions(void);
 
 #define ALGO_RSA        0x01
 #define ALGO_ECDH       0x12

@@ -34,14 +34,20 @@
 #include "mbedtls/eddsa.h"
 #endif
 
-bool has_pw1 = false;
-bool has_pw2 = false;
-bool has_pw3 = false;
-bool has_rc = false;
-uint8_t session_pw1[32];
-uint8_t session_rc[32];
-uint8_t session_pw3[32];
-uint8_t dek[IV_SIZE + 32];
+static openpgp_session_auth_t openpgp_sessions[APDU_SESSION_COUNT];
+
+openpgp_session_auth_t *openpgp_active_auth(void) {
+    return &openpgp_sessions[apdu_current_session()];
+}
+
+void openpgp_reset_all_sessions(void) {
+    mbedtls_platform_zeroize(openpgp_sessions, sizeof(openpgp_sessions));
+}
+
+void openpgp_revoke_auth_sessions(void) {
+    openpgp_reset_all_sessions();
+    file_clear_all_authenticated_sessions();
+}
 uint16_t algo_dec = EF_ALGO_PRIV2, algo_aut = EF_ALGO_PRIV3, pk_dec = EF_PK_DEC, pk_aut = EF_PK_AUT;
 
 uint8_t openpgp_aid[] = {
@@ -113,8 +119,8 @@ int scan_files_openpgp() {
             const uint8_t def3[8] = { 0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x37, 0x38 };
 
             uint8_t def[IV_SIZE + 32 + 32 + 32];
-            const uint8_t *dek = random_bytes_get(IV_SIZE + 32);
-            memcpy(def, dek, IV_SIZE + 32);
+            const uint8_t *initial_dek = random_bytes_get(IV_SIZE + 32);
+            memcpy(def, initial_dek, IV_SIZE + 32);
             memcpy(def + IV_SIZE + 32 + 32, def + IV_SIZE, 32);
             /* Wrapper #1 belongs exclusively to the optional Reset Code.
              * RC is empty at factory state, so leave no known default
@@ -320,10 +326,8 @@ void release_dek() {
     memset(dek, 0, sizeof(dek));
 }
 
-extern bool has_pwpiv;
-extern uint8_t session_pwpiv[32];
 int load_dek() {
-    if (!has_pw1 && !has_pw2 && !has_rc && !has_pw3 && !has_pwpiv) {
+    if (!has_pw1 && !has_pw2 && !has_rc && !has_pw3 && !piv_pin_is_verified()) {
         return PICOKEY_NO_LOGIN;
     }
     file_t *tf = search_by_fid(EF_DEK, NULL, SPECIFY_EF);
@@ -345,10 +349,10 @@ int load_dek() {
         memcpy(dek + IV_SIZE, file_get_data(tf) + IV_SIZE + 32 + 32, 32);
         r = aes_decrypt_cfb_256(session_pw3, dek, dek + IV_SIZE, 32);
     }
-    else if (has_pwpiv) {
+    else if (piv_pin_is_verified()) {
         memcpy(dek, file_get_data(tf), IV_SIZE);
         memcpy(dek + IV_SIZE, file_get_data(tf) + IV_SIZE + 32 + 32 + 32, 32);
-        r = aes_decrypt_cfb_256(session_pwpiv, dek, dek + IV_SIZE, 32);
+        r = aes_decrypt_cfb_256(piv_pin_session_key(), dek, dek + IV_SIZE, 32);
     }
     if (r != 0) {
         release_dek();
@@ -510,6 +514,9 @@ int pin_wrong_retry(const file_t *pin) {
 }
 
 int check_pin(const file_t *pin, const uint8_t *data, size_t len) {
+    if (!data || len == 0) {
+        return SW_WRONG_LENGTH();
+    }
     if (!pin) {
         return SW_REFERENCE_NOT_FOUND();
     }

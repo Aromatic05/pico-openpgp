@@ -57,6 +57,9 @@ int cmd_reset_retry() {
             }
             newpin_len = apdu.nc;
         }
+        if (newpin_len == 0) {
+            return SW_WRONG_LENGTH();
+        }
         int r = 0;
         if ((r = load_dek()) != PICOKEY_OK) {
             return SW_EXEC_ERROR();
@@ -120,6 +123,7 @@ int cmd_reset_retry() {
                 low_flash_available();
             }
             openpgp_unload();
+            openpgp_revoke_auth_sessions();
             mbedtls_platform_zeroize(old_dek, sizeof(old_dek));
             mbedtls_platform_zeroize(old_pw, sizeof(old_pw));
             mbedtls_platform_zeroize(old_status, sizeof(old_status));
@@ -128,6 +132,7 @@ int cmd_reset_retry() {
             return SW_MEMORY_FAILURE();
         }
         openpgp_unload();
+        openpgp_revoke_auth_sessions();
         low_flash_available();
         mbedtls_platform_zeroize(old_dek, sizeof(old_dek));
         mbedtls_platform_zeroize(old_pw, sizeof(old_pw));
