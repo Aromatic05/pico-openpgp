@@ -200,8 +200,8 @@ int cmd_import_data() {
     else {
         return SW_FUNC_NOT_SUPPORTED();
     }
-    if (fid == EF_PK_SIG) {
-        reset_sig_count();
+    if (fid == EF_PK_SIG && reset_sig_count() != PICOKEY_OK) {
+        return SW_EXEC_ERROR();
     }
     file_t *pbef = search_by_fid(fid + 3, NULL, SPECIFY_EF);
     if (!pbef) {

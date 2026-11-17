@@ -116,7 +116,9 @@ int cmd_pso() {
             }
             res_APDU_size = olen;
             //apdu.ne = key_size;
-            inc_sig_count();
+            if (inc_sig_count() != PICOKEY_OK) {
+                return SW_EXEC_ERROR();
+            }
         }
         else if (P1(apdu) == 0x80 && P2(apdu) == 0x86) {
             if (apdu.nc < key_size) { //needs padding
@@ -153,7 +155,9 @@ int cmd_pso() {
                 return SW_EXEC_ERROR();
             }
             res_APDU_size = olen;
-            inc_sig_count();
+            if (inc_sig_count() != PICOKEY_OK) {
+                return SW_EXEC_ERROR();
+            }
         }
         else if (P1(apdu) == 0x80 && P2(apdu) == 0x86) {
             mbedtls_ecdh_context ctx;

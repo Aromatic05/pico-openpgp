@@ -109,7 +109,9 @@ int cmd_keypair_gen() {
             return SW_EXEC_ERROR();
         }
         if (fid == EF_PK_SIG) {
-            reset_sig_count();
+            if (reset_sig_count() != PICOKEY_OK) {
+                return SW_EXEC_ERROR();
+            }
         }
         else if (fid == EF_PK_DEC) {
             // OpenPGP does not allow generating AES keys. So, we generate a new one when gen for DEC is called.
