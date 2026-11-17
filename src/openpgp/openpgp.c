@@ -616,9 +616,17 @@ int store_keys(void *key_ctx, int type, uint16_t key_id, bool use_kek) {
     }
     if (type == ALGO_RSA) {
         mbedtls_rsa_context *rsa = (mbedtls_rsa_context *) key_ctx;
-        key_size = mbedtls_mpi_size(&rsa->P) + mbedtls_mpi_size(&rsa->Q);
-        mbedtls_mpi_write_binary(&rsa->P, kdata, key_size / 2);
-        mbedtls_mpi_write_binary(&rsa->Q, kdata + key_size / 2, key_size / 2);
+        key_size = mbedtls_rsa_get_len(rsa);
+        if ((key_size != 128 && key_size != 256 && key_size != 384 && key_size != 512) ||
+            key_size > sizeof(kdata) ||
+            mbedtls_mpi_size(&rsa->P) > (size_t)key_size / 2 ||
+            mbedtls_mpi_size(&rsa->Q) > (size_t)key_size / 2) {
+            return PICOKEY_WRONG_LENGTH;
+        }
+        if (mbedtls_mpi_write_binary(&rsa->P, kdata, key_size / 2) != 0 ||
+            mbedtls_mpi_write_binary(&rsa->Q, kdata + key_size / 2, key_size / 2) != 0) {
+            return PICOKEY_WRONG_DATA;
+        }
     }
     else if (type == ALGO_ECDSA || type == ALGO_ECDH || type == ALGO_EDDSA) {
         mbedtls_ecp_keypair *ecdsa = (mbedtls_ecp_keypair *) key_ctx;
@@ -659,6 +667,9 @@ int store_keys(void *key_ctx, int type, uint16_t key_id, bool use_kek) {
 int load_private_key_rsa(mbedtls_rsa_context *ctx, file_t *fkey, bool use_dek) {
     int key_size = file_get_size(fkey);
     uint8_t kdata[4096 / 8];
+    if (key_size != 128 && key_size != 256 && key_size != 384 && key_size != 512) {
+        return PICOKEY_WRONG_LENGTH;
+    }
     memcpy(kdata, file_get_data(fkey), key_size);
     if (use_dek && dek_decrypt(kdata, key_size) != 0) {
         return PICOKEY_EXEC_ERROR;

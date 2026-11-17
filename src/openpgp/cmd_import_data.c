@@ -119,6 +119,14 @@ int cmd_import_data() {
     int r = 0;
     if (algo[0] == ALGO_RSA) {
         mbedtls_rsa_context rsa;
+        if (algo_len < 3) {
+            return SW_WRONG_DATA();
+        }
+        size_t bits = get_uint16_t_be(algo + 1);
+        if ((bits != 1024 && bits != 2048 && bits != 3072 && bits != 4096) ||
+            len[1] > bits / 16 || len[2] > bits / 16) {
+            return SW_WRONG_DATA();
+        }
         if (p[0] == NULL || len[0] == 0 || p[1] == NULL || len[1] == 0 || p[2] == NULL ||
             len[2] == 0) {
             return SW_WRONG_DATA();
@@ -153,6 +161,10 @@ int cmd_import_data() {
         if (r != 0) {
             mbedtls_rsa_free(&rsa);
             return SW_EXEC_ERROR();
+        }
+        if (mbedtls_mpi_bitlen(&rsa.N) != bits) {
+            mbedtls_rsa_free(&rsa);
+            return SW_WRONG_DATA();
         }
         r = store_keys(&rsa, ALGO_RSA, fid, true);
         make_rsa_response(&rsa);
