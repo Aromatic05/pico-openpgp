@@ -513,6 +513,9 @@ static int cmd_get_data() {
     if (P1(apdu) != 0x3F || P2(apdu) != 0xFF) {
         return SW_INCORRECT_P1P2();
     }
+    if (apdu.nc < 3) {
+        return SW_WRONG_LENGTH();
+    }
     if (apdu.data[0] != 0x5C || (apdu.data[1] & 0x80) || apdu.data[1] >= 4 || apdu.data[1] == 0) {
         return SW_WRONG_DATA();
     }
