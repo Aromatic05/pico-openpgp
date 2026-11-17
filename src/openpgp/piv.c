@@ -1072,6 +1072,10 @@ static int cmd_authenticate() {
             }
             // mbedtls_ecdh_read_public expects TLS format: [length][point_data].
             // PIV tag 0x85 carries the raw public point/key bytes.
+            if (a85.len > MBEDTLS_ECP_MAX_PT_LEN) {
+                mbedtls_ecdh_free(&ecdh_ctx);
+                return SW_WRONG_LENGTH();
+            }
             uint8_t pub_buf[1 + MBEDTLS_ECP_MAX_PT_LEN];
             pub_buf[0] = (uint8_t)a85.len;
             memcpy(pub_buf + 1, a85.data, a85.len);
