@@ -733,6 +733,9 @@ int load_private_key_ecdsa(mbedtls_ecp_keypair *ctx, file_t *fkey, bool use_dek)
 
 int load_aes_key(uint8_t *aes_key, file_t *fkey) {
     int key_size = file_get_size(fkey);
+    if (key_size != 16 && key_size != 24 && key_size != 32) {
+        return PICOKEY_WRONG_LENGTH;
+    }
     memcpy(aes_key, file_get_data(fkey), key_size);
     if (dek_decrypt(aes_key, key_size) != 0) {
         return PICOKEY_EXEC_ERROR;

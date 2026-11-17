@@ -79,7 +79,7 @@ int cmd_pso() {
             return SW_EXEC_ERROR();
         }
         if (P1(apdu) == 0x80 && P2(apdu) == 0x86) { //decipher
-            r = aes_decrypt(aes_key, NULL, key_size, PICO_KEYS_AES_MODE_CBC, apdu.data + 1, apdu.nc - 1);
+            r = aes_decrypt(aes_key, NULL, key_size * 8, PICO_KEYS_AES_MODE_CBC, apdu.data + 1, apdu.nc - 1);
             memset(aes_key, 0, sizeof(aes_key));
             if (r != PICOKEY_OK) {
                 return SW_EXEC_ERROR();
@@ -88,7 +88,7 @@ int cmd_pso() {
             res_APDU_size = apdu.nc - 1;
         }
         else if (P1(apdu) == 0x86 && P2(apdu) == 0x80) { //encipher
-            r = aes_encrypt(aes_key, NULL, key_size, PICO_KEYS_AES_MODE_CBC, apdu.data, apdu.nc);
+            r = aes_encrypt(aes_key, NULL, key_size * 8, PICO_KEYS_AES_MODE_CBC, apdu.data, apdu.nc);
             memset(aes_key, 0, sizeof(aes_key));
             if (r != PICOKEY_OK) {
                 return SW_EXEC_ERROR();

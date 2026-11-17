@@ -120,9 +120,10 @@ int cmd_keypair_gen() {
             uint8_t key_size = 32;
             memcpy(aes_key, random_bytes_get(key_size), key_size);
             r = store_keys(aes_key, ALGO_AES_256, EF_AES_KEY, true);
-            /* if storing the key fails, we silently continue */
-            //if (r != PICOKEY_OK)
-            //    return SW_EXEC_ERROR();
+            mbedtls_platform_zeroize(aes_key, sizeof(aes_key));
+            if (r != PICOKEY_OK) {
+                return SW_EXEC_ERROR();
+            }
         }
         low_flash_available();
         return SW_OK();

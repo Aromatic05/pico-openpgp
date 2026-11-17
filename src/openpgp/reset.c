@@ -271,7 +271,7 @@ int reset_openpgp_storage() {
         }
     }
 
-    /* AES is allocated dynamically and is not part of the static table. */
+    /* The AES key belongs to OpenPGP even though its FID is outside 0x10xx. */
     int r = clear_flash_file(search_by_fid(EF_AES_KEY, NULL, SPECIFY_EF));
     if (r != PICOKEY_OK) {
         return r;
