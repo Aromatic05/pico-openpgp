@@ -976,7 +976,10 @@ static const cmd_t cmds[] = {
 };
 
 int openpgp_process_apdu() {
-    sm_unwrap();
+    int r = sm_unwrap();
+    if (r != PICOKEY_OK) {
+        return r > 0 ? r : SW_SECURITY_STATUS_NOT_SATISFIED();
+    }
     for (const cmd_t *cmd = cmds; cmd->ins != 0x00; cmd++) {
         if (cmd->ins == INS(apdu)) {
             int r = cmd->cmd_handler();
