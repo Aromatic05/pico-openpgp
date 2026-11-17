@@ -17,6 +17,7 @@
 
 #include "openpgp.h"
 #include "asn1.h"
+#include "do.h"
 
 extern bool is_gpg;
 
@@ -43,7 +44,10 @@ int cmd_get_data() {
             is_gpg = true;
         }
         uint16_t fids[] = { 1, fid };
-        uint16_t data_len = parse_do(fids, 1);
+        int data_len = parse_do(fids, 1);
+        if (data_len < 0) {
+            return SW_WRONG_LENGTH();
+        }
         uint8_t *p = NULL;
         uint16_t tg = 0;
         uint16_t tg_len = 0;
@@ -78,6 +82,9 @@ int cmd_get_data() {
             }
             if (data_len >= 256) {
                 off++;
+            }
+            if (!openpgp_response_fits(off)) {
+                return SW_WRONG_LENGTH();
             }
             memmove(res_APDU + off, res_APDU, data_len);
             off = 0;

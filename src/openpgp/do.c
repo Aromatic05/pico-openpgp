@@ -17,19 +17,37 @@
 
 #include "openpgp.h"
 #include "asn1.h"
+#include "do.h"
+#include "usb.h"
+
+bool openpgp_response_fits(size_t additional) {
+    size_t capacity = APDU_RESPONSE_BUFFER_SIZE;
+#ifdef ENABLE_EMULATION
+    capacity = MIN(capacity, USB_BUFFER_SIZE - 2);
+#endif
+    return res_APDU_size <= capacity && additional <= capacity - res_APDU_size;
+}
 
 int parse_do(uint16_t *fids, int mode) {
     int len = 0;
     file_t *ef;
     for (int i = 0; i < fids[0]; i++) {
         if ((ef = search_by_fid(fids[i + 1], NULL, SPECIFY_EF))) {
-            uint16_t data_len;
+            int data_len;
             if ((ef->type & FILE_DATA_FUNC) == FILE_DATA_FUNC) {
                 data_len = ((int (*)(const file_t *, int))(ef->data))((const file_t *) ef, mode);
+                if (data_len < 0) {
+                    return -1;
+                }
             }
             else {
                 data_len = file_get_size(ef);
                 if (mode == 1) {
+                    size_t header = fids[0] > 1 && res_APDU_size > 0
+                        ? (fids[i + 1] < 0x0100 ? 1 : 2) + format_tlv_len(data_len, NULL) : 0;
+                    if (!openpgp_response_fits(header + data_len)) {
+                        return -1;
+                    }
                     if (fids[0] > 1 && res_APDU_size > 0) {
                         if (fids[i + 1] < 0x0100) {
                             res_APDU[res_APDU_size++] = fids[i + 1] & 0xff;
@@ -53,10 +71,16 @@ int parse_do(uint16_t *fids, int mode) {
 }
 
 int parse_trium(uint16_t fid, uint8_t num, size_t size) {
+    if (!openpgp_response_fits(num * size)) {
+        return -1;
+    }
     for (uint8_t i = 0; i < num; i++) {
         file_t *ef;
         if ((ef = search_by_fid(fid + i, NULL, SPECIFY_EF)) && ef->data) {
             uint16_t data_len = file_get_size(ef);
+            if (data_len != size) {
+                return -1;
+            }
             memcpy(res_APDU + res_APDU_size, file_get_data(ef), data_len);
             res_APDU_size += data_len;
         }
@@ -69,6 +93,9 @@ int parse_trium(uint16_t fid, uint8_t num, size_t size) {
 }
 
 int parse_ch_data(const file_t *f, int mode) {
+    if (!openpgp_response_fits(4)) {
+        return -1;
+    }
     uint16_t fids[] = {
         3,
         EF_CH_NAME, EF_LANG_PREF, EF_SEX,
@@ -77,7 +104,9 @@ int parse_ch_data(const file_t *f, int mode) {
     res_APDU[res_APDU_size++] = 0x82;
     uint8_t *lp = res_APDU + res_APDU_size;
     res_APDU_size += 2;
-    parse_do(fids, mode);
+    if (parse_do(fids, mode) < 0) {
+        return -1;
+    }
     uint16_t lpdif = res_APDU + res_APDU_size - lp - 2;
     *lp++ = lpdif >> 8;
     *lp++ = lpdif & 0xff;
@@ -85,10 +114,16 @@ int parse_ch_data(const file_t *f, int mode) {
 }
 
 int parse_sec_tpl(const file_t *f, int mode) {
+    if (!openpgp_response_fits(7)) {
+        return -1;
+    }
     res_APDU[res_APDU_size++] = EF_SEC_TPL & 0xff;
     res_APDU[res_APDU_size++] = 5;
     file_t *ef = search_by_fid(EF_SIG_COUNT, NULL, SPECIFY_ANY);
     if (ef && ef->data) {
+        if (file_get_size(ef) != 3) {
+            return -1;
+        }
         res_APDU[res_APDU_size++] = EF_SIG_COUNT & 0xff;
         res_APDU[res_APDU_size++] = 3;
         memcpy(res_APDU + res_APDU_size, file_get_data(ef), 3);
@@ -102,24 +137,36 @@ int parse_ch_cert(const file_t *f, int mode) {
 }
 
 int parse_fp(const file_t *f, int mode) {
+    if (!openpgp_response_fits(62)) {
+        return -1;
+    }
     res_APDU[res_APDU_size++] = EF_FP & 0xff;
     res_APDU[res_APDU_size++] = 60;
-    return parse_trium(EF_FP_SIG, 3, 20) + 2;
+    return parse_trium(EF_FP_SIG, 3, 20) < 0 ? -1 : 62;
 }
 
 int parse_cafp(const file_t *f, int mode) {
+    if (!openpgp_response_fits(62)) {
+        return -1;
+    }
     res_APDU[res_APDU_size++] = EF_CA_FP & 0xff;
     res_APDU[res_APDU_size++] = 60;
-    return parse_trium(EF_FP_CA1, 3, 20) + 2;
+    return parse_trium(EF_FP_CA1, 3, 20) < 0 ? -1 : 62;
 }
 
 int parse_ts(const file_t *f, int mode) {
+    if (!openpgp_response_fits(14)) {
+        return -1;
+    }
     res_APDU[res_APDU_size++] = EF_TS_ALL & 0xff;
     res_APDU[res_APDU_size++] = 12;
-    return parse_trium(EF_TS_SIG, 3, 4) + 2;
+    return parse_trium(EF_TS_SIG, 3, 4) < 0 ? -1 : 14;
 }
 
 int parse_keyinfo(const file_t *f, int mode) {
+    if (!openpgp_response_fits(res_APDU_size > 0 ? 8 : 6)) {
+        return -1;
+    }
     int init_len = res_APDU_size;
     if (res_APDU_size > 0) {
         res_APDU[res_APDU_size++] = EF_KEY_INFO & 0xff;
@@ -155,6 +202,9 @@ int parse_keyinfo(const file_t *f, int mode) {
 }
 
 int parse_pw_status(const file_t *f, int mode) {
+    if (!openpgp_response_fits(res_APDU_size > 0 ? 9 : 7)) {
+        return -1;
+    }
     file_t *ef;
     int init_len = res_APDU_size;
     if (res_APDU_size > 0) {
@@ -163,6 +213,9 @@ int parse_pw_status(const file_t *f, int mode) {
     }
     ef = search_by_fid(EF_PW_PRIV, NULL, SPECIFY_ANY);
     if (ef && ef->data) {
+        if (file_get_size(ef) < 7) {
+            return -1;
+        }
         memcpy(res_APDU + res_APDU_size, file_get_data(ef), 7);
         res_APDU_size += 7;
     }
@@ -275,6 +328,9 @@ const uint8_t algorithm_attr_ed448[] = {
 #endif
 
 int parse_algo(const uint8_t *algo, uint16_t tag) {
+    if (!openpgp_response_fits(algo[0] + 2)) {
+        return -1;
+    }
     res_APDU[res_APDU_size++] = tag & 0xff;
     memcpy(res_APDU + res_APDU_size, algo, algo[0] + 1);
     res_APDU_size += algo[0] + 1;
@@ -284,61 +340,71 @@ int parse_algo(const uint8_t *algo, uint16_t tag) {
 int parse_algoinfo(const file_t *f, int mode) {
     int datalen = 0;
     if (f->fid == EF_ALGO_INFO) {
+        if (!openpgp_response_fits(4)) {
+            return -1;
+        }
         res_APDU[res_APDU_size++] = EF_ALGO_INFO & 0xff;
         res_APDU[res_APDU_size++] = 0x82;
         uint8_t *lp = res_APDU + res_APDU_size;
         res_APDU_size += 2;
-        datalen += parse_algo(algorithm_attr_rsa1k, EF_ALGO_SIG);
-        datalen += parse_algo(algorithm_attr_rsa2k, EF_ALGO_SIG);
-        datalen += parse_algo(algorithm_attr_rsa3k, EF_ALGO_SIG);
-        datalen += parse_algo(algorithm_attr_rsa4k, EF_ALGO_SIG);
-        datalen += parse_algo(algorithm_attr_p256k1, EF_ALGO_SIG);
-        datalen += parse_algo(algorithm_attr_p256r1, EF_ALGO_SIG);
-        datalen += parse_algo(algorithm_attr_p384r1, EF_ALGO_SIG);
-        datalen += parse_algo(algorithm_attr_p521r1, EF_ALGO_SIG);
-        datalen += parse_algo(algorithm_attr_bp256r1, EF_ALGO_SIG);
-        datalen += parse_algo(algorithm_attr_bp384r1, EF_ALGO_SIG);
-        datalen += parse_algo(algorithm_attr_bp512r1, EF_ALGO_SIG);
+        const struct { const uint8_t *attr; uint16_t tag; } algorithms[] = {
+            { algorithm_attr_rsa1k, EF_ALGO_SIG },
+            { algorithm_attr_rsa2k, EF_ALGO_SIG },
+            { algorithm_attr_rsa3k, EF_ALGO_SIG },
+            { algorithm_attr_rsa4k, EF_ALGO_SIG },
+            { algorithm_attr_p256k1, EF_ALGO_SIG },
+            { algorithm_attr_p256r1, EF_ALGO_SIG },
+            { algorithm_attr_p384r1, EF_ALGO_SIG },
+            { algorithm_attr_p521r1, EF_ALGO_SIG },
+            { algorithm_attr_bp256r1, EF_ALGO_SIG },
+            { algorithm_attr_bp384r1, EF_ALGO_SIG },
+            { algorithm_attr_bp512r1, EF_ALGO_SIG },
 #if defined(MBEDTLS_EDDSA_C) && defined(MBEDTLS_ECP_DP_ED25519_ENABLED)
-        datalen += parse_algo(algorithm_attr_ed25519, EF_ALGO_SIG);
+            { algorithm_attr_ed25519, EF_ALGO_SIG },
 #endif
 #if defined(MBEDTLS_EDDSA_C) && defined(MBEDTLS_ECP_DP_ED448_ENABLED)
-        datalen += parse_algo(algorithm_attr_ed448, EF_ALGO_SIG);
+            { algorithm_attr_ed448, EF_ALGO_SIG },
 #endif
 
-        datalen += parse_algo(algorithm_attr_rsa1k, EF_ALGO_DEC);
-        datalen += parse_algo(algorithm_attr_rsa2k, EF_ALGO_DEC);
-        datalen += parse_algo(algorithm_attr_rsa3k, EF_ALGO_DEC);
-        datalen += parse_algo(algorithm_attr_rsa4k, EF_ALGO_DEC);
-        datalen += parse_algo(algorithm_attr_p256k1, EF_ALGO_DEC);
-        datalen += parse_algo(algorithm_attr_p256r1, EF_ALGO_DEC);
-        datalen += parse_algo(algorithm_attr_p384r1, EF_ALGO_DEC);
-        datalen += parse_algo(algorithm_attr_p521r1, EF_ALGO_DEC);
-        datalen += parse_algo(algorithm_attr_bp256r1, EF_ALGO_DEC);
-        datalen += parse_algo(algorithm_attr_bp384r1, EF_ALGO_DEC);
-        datalen += parse_algo(algorithm_attr_bp512r1, EF_ALGO_DEC);
-        datalen += parse_algo(algorithm_attr_cv25519, EF_ALGO_DEC);
+            { algorithm_attr_rsa1k, EF_ALGO_DEC },
+            { algorithm_attr_rsa2k, EF_ALGO_DEC },
+            { algorithm_attr_rsa3k, EF_ALGO_DEC },
+            { algorithm_attr_rsa4k, EF_ALGO_DEC },
+            { algorithm_attr_p256k1, EF_ALGO_DEC },
+            { algorithm_attr_p256r1, EF_ALGO_DEC },
+            { algorithm_attr_p384r1, EF_ALGO_DEC },
+            { algorithm_attr_p521r1, EF_ALGO_DEC },
+            { algorithm_attr_bp256r1, EF_ALGO_DEC },
+            { algorithm_attr_bp384r1, EF_ALGO_DEC },
+            { algorithm_attr_bp512r1, EF_ALGO_DEC },
+            { algorithm_attr_cv25519, EF_ALGO_DEC },
 #ifdef MBEDTLS_ECP_DP_CURVE448_ENABLED
-        datalen += parse_algo(algorithm_attr_x448, EF_ALGO_DEC);
+            { algorithm_attr_x448, EF_ALGO_DEC },
 #endif
 
-        datalen += parse_algo(algorithm_attr_rsa1k, EF_ALGO_AUT);
-        datalen += parse_algo(algorithm_attr_rsa2k, EF_ALGO_AUT);
-        datalen += parse_algo(algorithm_attr_rsa3k, EF_ALGO_AUT);
-        datalen += parse_algo(algorithm_attr_rsa4k, EF_ALGO_AUT);
-        datalen += parse_algo(algorithm_attr_p256k1, EF_ALGO_AUT);
-        datalen += parse_algo(algorithm_attr_p256r1, EF_ALGO_AUT);
-        datalen += parse_algo(algorithm_attr_p384r1, EF_ALGO_AUT);
-        datalen += parse_algo(algorithm_attr_p521r1, EF_ALGO_AUT);
-        datalen += parse_algo(algorithm_attr_bp256r1, EF_ALGO_AUT);
-        datalen += parse_algo(algorithm_attr_bp384r1, EF_ALGO_AUT);
-        datalen += parse_algo(algorithm_attr_bp512r1, EF_ALGO_AUT);
+            { algorithm_attr_rsa1k, EF_ALGO_AUT },
+            { algorithm_attr_rsa2k, EF_ALGO_AUT },
+            { algorithm_attr_rsa3k, EF_ALGO_AUT },
+            { algorithm_attr_rsa4k, EF_ALGO_AUT },
+            { algorithm_attr_p256k1, EF_ALGO_AUT },
+            { algorithm_attr_p256r1, EF_ALGO_AUT },
+            { algorithm_attr_p384r1, EF_ALGO_AUT },
+            { algorithm_attr_p521r1, EF_ALGO_AUT },
+            { algorithm_attr_bp256r1, EF_ALGO_AUT },
+            { algorithm_attr_bp384r1, EF_ALGO_AUT },
+            { algorithm_attr_bp512r1, EF_ALGO_AUT },
 #if defined(MBEDTLS_EDDSA_C) && defined(MBEDTLS_ECP_DP_ED25519_ENABLED)
-        datalen += parse_algo(algorithm_attr_ed25519, EF_ALGO_AUT);
+            { algorithm_attr_ed25519, EF_ALGO_AUT },
 #endif
 #if defined(MBEDTLS_EDDSA_C) && defined(MBEDTLS_ECP_DP_ED448_ENABLED)
-        datalen += parse_algo(algorithm_attr_ed448, EF_ALGO_AUT);
+            { algorithm_attr_ed448, EF_ALGO_AUT },
 #endif
+        };
+        for (size_t i = 0; i < sizeof(algorithms) / sizeof(algorithms[0]); i++) {
+            if (parse_algo(algorithms[i].attr, algorithms[i].tag) < 0) {
+                return -1;
+            }
+        }
         uint16_t lpdif = res_APDU + res_APDU_size - lp - 2;
         *lp++ = lpdif >> 8;
         *lp++ = lpdif & 0xff;
@@ -348,14 +414,18 @@ int parse_algoinfo(const file_t *f, int mode) {
         uint16_t fid = 0x1000 | f->fid;
         file_t *ef;
         if (!(ef = search_by_fid(fid, NULL, SPECIFY_EF)) || !ef->data) {
-            datalen += parse_algo(algorithm_attr_rsa2k, f->fid);
+            datalen = parse_algo(algorithm_attr_rsa2k, f->fid);
         }
         else {
             uint16_t len = file_get_size(ef);
+            size_t header = res_APDU_size > 0 ? 1 + format_tlv_len(len, NULL) : 0;
+            if (!openpgp_response_fits(header + len)) {
+                return -1;
+            }
             if (res_APDU_size > 0) {
                 res_APDU[res_APDU_size++] = f->fid & 0xff;
-                res_APDU[res_APDU_size++] = len & 0xff;
-                datalen += 2;
+                res_APDU_size += format_tlv_len(len, res_APDU + res_APDU_size);
+                datalen += header;
             }
             memcpy(res_APDU + res_APDU_size, file_get_data(ef), len);
             res_APDU_size += len;
@@ -366,6 +436,9 @@ int parse_algoinfo(const file_t *f, int mode) {
 }
 
 int parse_app_data(const file_t *f, int mode) {
+    if (!openpgp_response_fits(4)) {
+        return -1;
+    }
     uint16_t fids[] = {
         5,
         EF_FULL_AID, EF_HIST_BYTES, EF_EXLEN_INFO, EF_GFM, EF_DISCRETE_DO
@@ -374,7 +447,9 @@ int parse_app_data(const file_t *f, int mode) {
     res_APDU[res_APDU_size++] = 0x82;
     uint8_t *lp = res_APDU + res_APDU_size;
     res_APDU_size += 2;
-    parse_do(fids, mode);
+    if (parse_do(fids, mode) < 0) {
+        return -1;
+    }
     uint16_t lpdif = res_APDU + res_APDU_size - lp - 2;
     *lp++ = lpdif >> 8;
     *lp++ = lpdif & 0xff;
@@ -382,6 +457,9 @@ int parse_app_data(const file_t *f, int mode) {
 }
 
 int parse_discrete_do(const file_t *f, int mode) {
+    if (!openpgp_response_fits(4)) {
+        return -1;
+    }
     uint16_t fids[] = {
         12,
         EF_EXT_CAP, EF_ALGO_SIG, EF_ALGO_DEC, EF_ALGO_AUT, EF_PW_STATUS, EF_FP, EF_CA_FP, EF_TS_ALL,
@@ -391,7 +469,9 @@ int parse_discrete_do(const file_t *f, int mode) {
     res_APDU[res_APDU_size++] = 0x82;
     uint8_t *lp = res_APDU + res_APDU_size;
     res_APDU_size += 2;
-    parse_do(fids, mode);
+    if (parse_do(fids, mode) < 0) {
+        return -1;
+    }
     uint16_t lpdif = res_APDU + res_APDU_size - lp - 2;
     *lp++ = lpdif >> 8;
     *lp++ = lpdif & 0xff;

@@ -34,3 +34,5 @@ extern const uint8_t algorithm_attr_ed25519[];
 #if defined(MBEDTLS_EDDSA_C) && defined(MBEDTLS_ECP_DP_ED448_ENABLED)
 extern const uint8_t algorithm_attr_ed448[];
 #endif
+
+extern bool openpgp_response_fits(size_t additional);
