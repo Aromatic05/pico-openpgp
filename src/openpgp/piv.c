@@ -760,7 +760,7 @@ static int cmd_authenticate() {
     }
     uint8_t *meta = NULL;
     int meta_len = 0;
-    if ((meta_len = meta_find(key_ref, &meta)) < 4) {
+    if ((meta_len = meta_find(key_ref, &meta)) < (key_ref == EF_PIV_KEY_CARDMGM ? 3 : 4)) {
         return SW_REFERENCE_NOT_FOUND();
     }
     if (meta[1] == PINPOLICY_DEFAULT) {
@@ -1289,16 +1289,16 @@ static int cmd_set_mgmkey() {
     if (apdu.nc != (size_t)pinlen + 3) {
         return SW_WRONG_LENGTH();
     }
-    uint8_t *meta = NULL, new_meta[4];
+    uint8_t *meta = NULL, new_meta[3];
     int meta_len = 0;
-    if ((meta_len = meta_find(key_ref, &meta)) < 4) {
+    if ((meta_len = meta_find(key_ref, &meta)) < 3) {
         return SW_REFERENCE_NOT_FOUND();
     }
     file_t *ef = search_by_fid(key_ref, NULL, SPECIFY_ANY);
     if (!ef || file_put_data(ef, apdu.data + 3, pinlen) != PICOKEY_OK) {
         return SW_EXEC_ERROR();
     }
-    memcpy(new_meta, meta, 4);
+    memcpy(new_meta, meta, sizeof(new_meta));
     new_meta[0] = algo;
     new_meta[2] = touch;
     if (meta_add(key_ref, new_meta, sizeof(new_meta)) != PICOKEY_OK) {
