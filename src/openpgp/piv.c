@@ -481,6 +481,13 @@ static int cmd_verify() {
     if (key_ref != 0x80) {
         return SW_REFERENCE_NOT_FOUND();
     }
+    if (P1(apdu) == 0xFF) {
+        if (apdu.nc != 0) {
+            return SW_WRONG_LENGTH();
+        }
+        reset_piv_pin_session();
+        return SW_OK();
+    }
     file_t *pw, *pw_status;
     uint16_t fid = EF_PIV_PIN;
     if (!(pw = search_by_fid(fid, NULL, SPECIFY_EF))) {
