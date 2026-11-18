@@ -30,6 +30,8 @@
 #include "crypto_utils.h"
 #include "files.h"
 
+#define OPENPGP_MAX_PIN_LENGTH 127
+
 typedef struct {
     bool has_pw1;
     bool has_pw2;

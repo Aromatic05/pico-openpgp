@@ -228,7 +228,7 @@ int scan_files_openpgp() {
     if ((ef = search_by_fid(EF_PW_PRIV, NULL, SPECIFY_ANY))) {
         if (!ef->data) {
             printf("PW status is empty. Initializing to default\r\n");
-            const uint8_t def[] = { 0x1, 127, 127, 127, 3, 0, 3 };
+            const uint8_t def[] = { 0x1, OPENPGP_MAX_PIN_LENGTH, OPENPGP_MAX_PIN_LENGTH, OPENPGP_MAX_PIN_LENGTH, 3, 0, 3 };
             ret = file_put_data(ef, def, sizeof(def));
             if (ret != PICOKEY_OK) {
                 goto init_done;

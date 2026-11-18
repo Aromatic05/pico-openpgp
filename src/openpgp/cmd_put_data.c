@@ -43,6 +43,9 @@ int cmd_put_data() {
     if (apdu.nc > 0 && (ef->type & FILE_DATA_FLASH)) {
         int r = 0;
         if (fid == EF_RC) {
+            if (apdu.nc > OPENPGP_MAX_PIN_LENGTH) {
+                return SW_WRONG_LENGTH();
+            }
             has_rc = false;
             if ((r = load_dek()) != PICOKEY_OK) {
                 return SW_EXEC_ERROR();

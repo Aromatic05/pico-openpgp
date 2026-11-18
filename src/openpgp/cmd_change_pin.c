@@ -28,7 +28,7 @@ int cmd_change_pin() {
         return SW_REFERENCE_NOT_FOUND();
     }
     uint8_t pin_len = file_get_data(pw)[0];
-    if (apdu.nc <= pin_len) {
+    if (apdu.nc <= pin_len || apdu.nc - pin_len > OPENPGP_MAX_PIN_LENGTH) {
         return SW_WRONG_LENGTH();
     }
     uint16_t r = 0;

@@ -38,7 +38,7 @@ int cmd_reset_retry() {
                 return SW_REFERENCE_NOT_FOUND();
             }
             uint8_t pin_len = file_get_data(rc)[0];
-            if (apdu.nc <= pin_len) {
+            if (apdu.nc <= pin_len || apdu.nc - pin_len > OPENPGP_MAX_PIN_LENGTH) {
                 return SW_WRONG_LENGTH();
             }
             uint16_t r = check_pin(rc, apdu.data, pin_len);
@@ -57,7 +57,7 @@ int cmd_reset_retry() {
             }
             newpin_len = apdu.nc;
         }
-        if (newpin_len == 0) {
+        if (newpin_len == 0 || newpin_len > OPENPGP_MAX_PIN_LENGTH) {
             return SW_WRONG_LENGTH();
         }
         int r = 0;
