@@ -24,7 +24,7 @@ int cmd_change_pin() {
     }
     uint16_t fid = 0x1000 | P2(apdu);
     file_t *pw;
-    if (!(pw = search_by_fid(fid, NULL, SPECIFY_EF))) {
+    if (!(pw = search_by_fid(fid, NULL, SPECIFY_EF)) || !file_has_data(pw)) {
         return SW_REFERENCE_NOT_FOUND();
     }
     uint8_t pin_len = file_get_data(pw)[0];
@@ -36,7 +36,17 @@ int cmd_change_pin() {
     if (r != 0x9000) {
         return r;
     }
-    if ((r = load_dek()) != PICOKEY_OK) {
+    if (fid == EF_RC) {
+        has_pw1 = has_pw2 = false;
+        has_rc = true;
+        hash_multi(apdu.data, pin_len, session_rc);
+    }
+    r = load_dek();
+    if (fid == EF_RC) {
+        has_rc = false;
+        mbedtls_platform_zeroize(session_rc, sizeof(session_rc));
+    }
+    if (r != PICOKEY_OK) {
         return SW_EXEC_ERROR();
     }
 
@@ -68,6 +78,11 @@ int cmd_change_pin() {
         hash_multi(apdu.data + pin_len, apdu.nc - pin_len, session_pw1);
         memcpy(def + IV_SIZE, dek + IV_SIZE, 32);
         aes_encrypt_cfb_256(session_pw1, def, def + IV_SIZE, 32);
+    }
+    else if (fid == EF_RC) {
+        hash_multi(apdu.data + pin_len, apdu.nc - pin_len, session_rc);
+        memcpy(def + IV_SIZE + 32, dek + IV_SIZE, 32);
+        aes_encrypt_cfb_256(session_rc, def, def + IV_SIZE + 32, 32);
     }
     else if (P2(apdu) == 0x83) {
         hash_multi(apdu.data + pin_len, apdu.nc - pin_len, session_pw3);
