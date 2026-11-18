@@ -69,6 +69,12 @@
 #define IS_ACTIVE(x) ((x) >= EF_PIV_KEY_AUTHENTICATION && (x) <= EF_PIV_KEY_CARDAUTH)
 #define IS_KEY(x) ((IS_ACTIVE((x))) || (IS_RETIRED((x))))
 
+static const uint8_t default_mgm_key[24] = {
+    0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08,
+    0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08,
+    0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08,
+};
+
 static uint16_t piv_key_storage_fid(uint8_t key_ref) {
     return key_ref == 0x93 ? EF_PIV_KEY_RETIRED18 : key_ref;
 }
@@ -297,11 +303,6 @@ static int scan_files_piv() {
             reset_dek = true;
         }
     }
-    static const uint8_t default_mgm_key[24] = {
-        0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08,
-        0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08,
-        0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08,
-    };
     file_t *mgm = search_by_fid(EF_PIV_KEY_CARDMGM, NULL, SPECIFY_EF);
     uint8_t *meta = NULL;
     uint16_t meta_len = meta_find(EF_PIV_KEY_CARDMGM, &meta);
@@ -682,7 +683,8 @@ static int cmd_get_metadata() {
             eq = memcmp(dhash, file_get_data(ef_key) + 1, file_get_size(ef_key) - 1);
         }
         else if (key_ref == EF_PIV_KEY_CARDMGM) {
-            eq = memcmp("\x01\x02\x03\x04\x05\x06\x07\x08\x01\x02\x03\x04\x05\x06\x07\x08\x01\x02\x03\x04\x05\x06\x07\x08", file_get_data(ef_key), file_get_size(ef_key));
+            eq = file_get_size(ef_key) != sizeof(default_mgm_key) ||
+                 memcmp(default_mgm_key, file_get_data(ef_key), sizeof(default_mgm_key)) != 0;
         }
         res_APDU[res_APDU_size++] = 0x5;
         res_APDU[res_APDU_size++] = 1;
