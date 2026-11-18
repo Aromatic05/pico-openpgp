@@ -27,6 +27,54 @@
 
 #include "mbedtls/asn1.h"
 
+static int save_imported_key(void *key, int type, uint16_t fid) {
+    file_t *public_key = search_by_fid(fid + 3, NULL, SPECIFY_EF);
+    file_t *counter = NULL;
+    uint8_t old_counter[3];
+    if (!public_key) {
+        return SW_REFERENCE_NOT_FOUND();
+    }
+    if (fid == EF_PK_SIG) {
+        counter = search_by_fid(EF_SIG_COUNT, NULL, SPECIFY_ANY);
+        if (file_get_size(counter) != sizeof(old_counter)) {
+            return SW_EXEC_ERROR();
+        }
+        memcpy(old_counter, file_get_data(counter), sizeof(old_counter));
+    }
+    uint16_t old_public_len = file_get_size(public_key);
+    uint8_t *old_public = NULL;
+    if (old_public_len) {
+        old_public = malloc(old_public_len);
+        if (!old_public) {
+            return SW_MEMORY_FAILURE();
+        }
+        memcpy(old_public, file_get_data(public_key), old_public_len);
+    }
+
+    int r = file_put_data(public_key, res_APDU, res_APDU_size);
+    bool public_written = r == PICOKEY_OK;
+    bool counter_written = false;
+    if (r == PICOKEY_OK && counter) {
+        r = file_put_data(counter, (const uint8_t[3]){0}, sizeof(old_counter));
+        counter_written = r == PICOKEY_OK;
+    }
+    /* store_keys publishes the cached writes only after saving the private key. */
+    if (r == PICOKEY_OK) {
+        r = store_keys(key, type, fid, true);
+    }
+    if (r != PICOKEY_OK && public_written) {
+        int restore_counter = counter_written
+            ? file_put_data(counter, old_counter, sizeof(old_counter)) : PICOKEY_OK;
+        int restore_public = old_public_len
+            ? file_put_data(public_key, old_public, old_public_len) : flash_clear_file(public_key);
+        if (restore_counter == PICOKEY_OK && restore_public == PICOKEY_OK) {
+            low_flash_available();
+        }
+    }
+    free(old_public);
+    return r == PICOKEY_OK ? SW_OK() : SW_EXEC_ERROR();
+}
+
 int cmd_import_data() {
     file_t *ef = NULL;
     uint16_t fid = 0x0;
@@ -166,12 +214,9 @@ int cmd_import_data() {
             mbedtls_rsa_free(&rsa);
             return SW_WRONG_DATA();
         }
-        r = store_keys(&rsa, ALGO_RSA, fid, true);
         make_rsa_response(&rsa);
+        r = save_imported_key(&rsa, ALGO_RSA, fid);
         mbedtls_rsa_free(&rsa);
-        if (r != PICOKEY_OK) {
-            return SW_EXEC_ERROR();
-        }
     }
     else if (algo[0] == ALGO_ECDSA || algo[0] == ALGO_ECDH || algo[0] == ALGO_EDDSA) {
         mbedtls_ecp_keypair ecdsa;
@@ -207,27 +252,13 @@ int cmd_import_data() {
             mbedtls_ecp_keypair_free(&ecdsa);
             return SW_EXEC_ERROR();
         }
-        r = store_keys(&ecdsa, ALGO_ECDSA, fid, true);
         make_ecdsa_response(&ecdsa);
+        r = save_imported_key(&ecdsa, ALGO_ECDSA, fid);
         mbedtls_ecp_keypair_free(&ecdsa);
-        if (r != PICOKEY_OK) {
-            return SW_EXEC_ERROR();
-        }
     }
     else {
         return SW_FUNC_NOT_SUPPORTED();
     }
-    if (fid == EF_PK_SIG && reset_sig_count() != PICOKEY_OK) {
-        return SW_EXEC_ERROR();
-    }
-    file_t *pbef = search_by_fid(fid + 3, NULL, SPECIFY_EF);
-    if (!pbef) {
-        return SW_REFERENCE_NOT_FOUND();
-    }
-    r = file_put_data(pbef, res_APDU, res_APDU_size);
-    if (r != PICOKEY_OK) {
-        return SW_EXEC_ERROR();
-    }
     res_APDU_size = 0; //make_*_response sets a response. we need to overwrite
-    return SW_OK();
+    return r;
 }
