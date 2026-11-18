@@ -55,6 +55,7 @@
 #define PINPOLICY_NEVER 1
 #define PINPOLICY_ONCE 2
 #define PINPOLICY_ALWAYS 3
+#define PIV_PIN_FIELD_SIZE 8
 
 #define TOUCHPOLICY_DEFAULT 0
 #define TOUCHPOLICY_NEVER 1
@@ -1437,17 +1438,16 @@ static int cmd_change_pin() {
         return SW_MEMORY_FAILURE();
     }
     uint8_t *pin_data = file_get_data(ef);
-    if (apdu.nc <= pin_data[0]) {
+    if (apdu.nc != (size_t)pin_data[0] + PIV_PIN_FIELD_SIZE) {
         return SW_WRONG_LENGTH();
     }
-    uint8_t pin_len = (uint8_t)(apdu.nc - pin_data[0]);
     uint16_t ret = check_pin(ef, apdu.data, pin_data[0]);
     if (ret != 0x9000) {
         return ret;
     }
     uint8_t dhash[33];
-    dhash[0] = pin_len;
-    double_hash_pin(apdu.data + pin_data[0], pin_len, dhash + 1);
+    dhash[0] = PIV_PIN_FIELD_SIZE;
+    double_hash_pin(apdu.data + pin_data[0], PIV_PIN_FIELD_SIZE, dhash + 1);
     if (file_put_data(ef, dhash, sizeof(dhash)) != PICOKEY_OK) {
         mbedtls_platform_zeroize(dhash, sizeof(dhash));
         return SW_MEMORY_FAILURE();
@@ -1467,17 +1467,16 @@ static int cmd_reset_retry() {
         return SW_MEMORY_FAILURE();
     }
     uint8_t *puk_data = file_get_data(ef);
-    if (apdu.nc <= puk_data[0]) {
+    if (apdu.nc != (size_t)puk_data[0] + PIV_PIN_FIELD_SIZE) {
         return SW_WRONG_LENGTH();
     }
-    uint8_t pin_len = (uint8_t)(apdu.nc - puk_data[0]);
     uint16_t ret = check_pin(ef, apdu.data, puk_data[0]);
     if (ret != 0x9000) {
         return ret;
     }
     uint8_t dhash[33];
-    dhash[0] = pin_len;
-    double_hash_pin(apdu.data + puk_data[0], pin_len, dhash + 1);
+    dhash[0] = PIV_PIN_FIELD_SIZE;
+    double_hash_pin(apdu.data + puk_data[0], PIV_PIN_FIELD_SIZE, dhash + 1);
     piv_pin_state_snapshot_t snapshot;
     if (piv_capture_pin_state(&snapshot) != PICOKEY_OK) {
         mbedtls_platform_zeroize(dhash, sizeof(dhash));
